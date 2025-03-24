@@ -9,7 +9,6 @@ As SwiftUI continues to evolve, adhering to established patterns becomes increas
 The examples provided demonstrate both recommended approaches and anti-patterns to avoid. By following these guidelines, development teams can ensure consistency in code style, improve collaboration, and reduce technical debt.
 
 
-<topic>
 ## 1. View Structure and Organization
 
 ### Overview
@@ -154,6 +153,6 @@ struct ProductDetailView: View {
     }
 }
 ```
-</topic>
+
 
 
