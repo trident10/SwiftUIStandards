@@ -156,3 +156,162 @@ struct ProductDetailView: View {
 
 
 
+## 2. State Management
+
+### Overview
+Proper state management is critical in SwiftUI applications. SwiftUI offers several property wrappers and approaches to manage state, each with specific use cases and implications.
+
+### Best Practices
+- Use the most appropriate property wrapper for each use case:
+  - `@State` for simple, view-local state
+  - `@Binding` for state passed from a parent
+  - `@ObservedObject` for external reference types that can change
+  - `@StateObject` for owned reference types that need to persist through view updates
+  - `@EnvironmentObject` for dependency injection of shared objects
+  - `@AppStorage` for user defaults
+  - `@SceneStorage` for UI state persistence between app launches
+- Keep state at the highest necessary level, not higher
+- Prefer value types (structs) for modeling state where appropriate
+- Use readonly computed properties for derived state
+
+### Things to Avoid
+- Using `@State` for data that should be shared across views
+- Overusing `@EnvironmentObject` for data that only needs to be passed to a few views
+- Creating deep property paths with multiple `@Binding` references
+- Using mutable global state instead of proper state management
+- Mixing different state management approaches unnecessarily
+
+### Considerations
+- Performance impact of property wrappers, especially with large objects
+- Memory management and potential retain cycles
+- Debugging complexity with deeply nested state
+- View lifecycle and when state is initialized or reset
+
+### Good Example
+```swift
+// Parent view creates and owns the state
+struct ParentView: View {
+    @StateObject private var viewModel = ShoppingCartViewModel()
+    
+    var body: some View {
+        VStack {
+            CartSummaryView(itemCount: viewModel.itemCount)
+            CartItemsView(items: $viewModel.items)
+            
+            // Local state for UI elements
+            CartActionsView(onCheckout: viewModel.checkout)
+        }
+    }
+}
+
+// Child view receives only what it needs
+struct CartSummaryView: View {
+    let itemCount: Int
+    
+    var body: some View {
+        Text("Your cart contains \(itemCount) item(s)")
+    }
+}
+
+// Child view that needs to modify the parent's state
+struct CartItemsView: View {
+    @Binding var items: [CartItem]
+    
+    var body: some View {
+        List {
+            ForEach(items) { item in
+                CartItemRow(item: item)
+            }
+            .onDelete(perform: removeItems)
+        }
+    }
+    
+    private func removeItems(at offsets: IndexSet) {
+        items.remove(atOffsets: offsets)
+    }
+}
+
+// View with local actions that calls back to parent
+struct CartActionsView: View {
+    let onCheckout: () -> Void
+    @State private var showingConfirmation = false
+    
+    var body: some View {
+        Button("Checkout") {
+            showingConfirmation = true
+        }
+        .alert(isPresented: $showingConfirmation) {
+            Alert(
+                title: Text("Confirm Checkout"),
+                message: Text("Do you want to proceed with checkout?"),
+                primaryButton: .default(Text("Yes"), action: onCheckout),
+                secondaryButton: .cancel()
+            )
+        }
+    }
+}
+```
+
+### Bad Example
+```swift
+// Global state - avoid this pattern
+var globalCart = ShoppingCart()
+
+struct BadParentView: View {
+    // Using @State for shared data that should be in a model
+    @State private var items: [CartItem] = []
+    @State private var isCheckingOut = false
+    
+    var body: some View {
+        VStack {
+            // Passing too many properties instead of a cohesive model
+            BadCartSummaryView(items: items)
+            BadCartItemsView(items: $items, isCheckingOut: $isCheckingOut)
+            
+            Button("Checkout") {
+                // Directly modifying global state
+                globalCart.items = items
+                isCheckingOut = true
+                // Business logic embedded in the view
+                processCheckout()
+            }
+        }
+    }
+    
+    func processCheckout() {
+        // Complex business logic in the view
+        print("Processing checkout...")
+    }
+}
+
+struct BadCartSummaryView: View {
+    // Receiving the entire array when only needing the count
+    let items: [CartItem]
+    
+    var body: some View {
+        Text("Your cart contains \(items.count) item(s)")
+    }
+}
+
+struct BadCartItemsView: View {
+    // Receiving state not relevant to this view
+    @Binding var items: [CartItem]
+    @Binding var isCheckingOut: Bool
+    
+    var body: some View {
+        List {
+            ForEach(items) { item in
+                Text(item.name)
+            }
+            .onDelete(perform: { offsets in
+                // Directly modifying global state alongside binding
+                items.remove(atOffsets: offsets)
+                globalCart.items.remove(atOffsets: offsets)
+            })
+        }
+        .disabled(isCheckingOut) // Using a binding that could be a simple parameter
+    }
+}
+```
+
+
