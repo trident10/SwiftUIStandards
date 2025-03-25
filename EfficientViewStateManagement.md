@@ -1,33 +1,19 @@
 
-# Improved View State Management in SwiftUI
-
-## Introduction
-
+Introduction
 Managing view states during data fetching is a common challenge in iOS development with SwiftUI. Applications typically need to handle:
 
-1. **Loading state** - When data is being fetched
-2. **Success state** - When data is successfully loaded
-3. **Error state** - When data fetching fails, with different presentation options
+Loading state - When data is being fetched
+Success state - When data is successfully loaded
+Error state - When data fetching fails, with different presentation options
 
-This document compares different approaches to state management in SwiftUI and analyzes their effectiveness, with a focus on improving code readability by extracting UI components into private computed variables.
-
-## Basic Setup
-
-Let's first establish the foundation for our examples:
-
-```swift
-// Basic model
+This document compares different approaches to state management in SwiftUI and analyzes their effectiveness, with a focus on improving code readability and maintainability.
+Basic Models and Error Types
+First, let's define some basic types we'll use throughout all examples:
+swiftCopy// Basic model
 struct Post: Identifiable, Decodable {
     let id: Int
     let title: String
     let body: String
-}
-
-// View state enum
-enum ViewState<T> {
-    case loading
-    case loaded(T)
-    case error(Error, ErrorDisplayType)
 }
 
 // Error display options
@@ -50,8 +36,130 @@ enum APIError: Error, LocalizedError {
         }
     }
 }
+Approach 0: Traditional Approach with Separate State Properties
+Let's first look at a simple implementation without a dedicated state enum:
+swiftCopy// Basic ViewModel with separate state properties
+class BasicPostsViewModel: ObservableObject {
+    @Published var isLoading = false
+    @Published var posts: [Post] = []
+    @Published var error: Error? = nil
+    @Published var errorDisplayType: ErrorDisplayType? = nil
+    
+    func fetchPosts() {
+        isLoading = true
+        posts = []
+        error = nil
+        errorDisplayType = nil
+        
+        // Simulating network call
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            // Randomly succeed or fail for demonstration
+            let random = Int.random(in: 0...2)
+            
+            self.isLoading = false
+            if random == 0 {
+                // Success
+                self.posts = [
+                    Post(id: 1, title: "First Post", body: "This is the first post content"),
+                    Post(id: 2, title: "Second Post", body: "This is the second post content"),
+                    Post(id: 3, title: "Third Post", body: "This is the third post content")
+                ]
+            } else if random == 1 {
+                // Error with alert
+                self.error = APIError.serverError(500)
+                self.errorDisplayType = .alert
+            } else {
+                // Error with full screen
+                self.error = APIError.networkError("Connection failed")
+                self.errorDisplayType = .fullScreen
+            }
+        }
+    }
+}
 
-// ViewModel for fetching posts
+// View using the basic ViewModel
+struct BasicPostsView: View {
+    @StateObject private var viewModel = BasicPostsViewModel()
+    @State private var showErrorAlert = false
+    
+    var body: some View {
+        ZStack {
+            if viewModel.isLoading {
+                ProgressView("Loading posts...")
+            } else if let error = viewModel.error, viewModel.errorDisplayType == .fullScreen {
+                VStack {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 50))
+                        .foregroundColor(.red)
+                        .padding()
+                    
+                    Text("Error")
+                        .font(.title)
+                    
+                    Text(error.localizedDescription)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                    
+                    Button("Try Again") {
+                        viewModel.fetchPosts()
+                    }
+                    .padding()
+                }
+            } else {
+                List(viewModel.posts) { post in
+                    VStack(alignment: .leading) {
+                        Text(post.title)
+                            .font(.headline)
+                        Text(post.body)
+                            .font(.body)
+                            .lineLimit(2)
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .alert("Error", isPresented: Binding<Bool>(
+            get: { viewModel.error != nil && viewModel.errorDisplayType == .alert },
+            set: { if !$0 { viewModel.error = nil } }
+        )) {
+            Button("OK", role: .cancel) { }
+            Button("Try Again") {
+                viewModel.fetchPosts()
+            }
+        } message: {
+            if let error = viewModel.error {
+                Text(error.localizedDescription)
+            } else {
+                Text("An error occurred")
+            }
+        }
+        .onAppear {
+            viewModel.fetchPosts()
+        }
+    }
+}
+Problems with the Traditional Approach
+This basic approach has several drawbacks:
+
+State Inconsistency: Multiple properties must be manually kept in sync. It's possible to have isLoading = true and error != nil at the same time, creating undefined behavior.
+Multiple Sources of Truth: Each state aspect (loading, error, data) has its own property, making it harder to ensure consistent state transitions.
+Prone to Errors: Developers can easily forget to update one of the properties during a state change.
+Complex Conditional Logic: The view needs to check multiple properties to determine what to display.
+No Type Safety: There's no compile-time guarantee that all possible states are handled.
+Difficult to Validate: Hard to validate that the view model is in a valid state at any given time.
+Hard to Extend: Adding new states requires adding new properties and updating all conditionals throughout the code.
+Poor Reusability: This pattern requires duplicating similar logic across different view models.
+
+Improved Approach - Using ViewState Enum
+To address these issues, we can use a dedicated enum to represent the state:
+swiftCopy// View state enum to encapsulate all possible states
+enum ViewState<T> {
+    case loading
+    case loaded(T)
+    case error(Error, ErrorDisplayType)
+}
+
+// ViewModel for fetching posts with the ViewState enum
 class PostsViewModel: ObservableObject {
     @Published var state: ViewState<[Post]> = .loading
     
@@ -111,7 +219,19 @@ class PostsViewModel: ObservableObject {
         }
     }
 }
-```
+Benefits of the ViewState Enum
+The ViewState enum approach offers several advantages:
+
+Single Source of Truth: The state is represented by a single property, ensuring consistency.
+Type Safety: The enum and associated values provide compile-time type checking.
+Exhaustive Handling: Swift requires handling all enum cases in a switch statement, ensuring all states are addressed.
+Impossible States Are Impossible: The enum structure prevents invalid state combinations (e.g., can't be loading and have an error simultaneously).
+Clear State Transitions: State changes involve assigning a new enum value, making transitions explicit and traceable.
+Easy to Extend: Adding a new state just requires adding a new enum case.
+Better Encapsulation: Details of state representation are hidden behind the enum's API.
+Improved Testability: Testing state transitions becomes more straightforward with clearly defined states.
+
+Now that we have established the ViewState enum as a superior approach, let's explore different ways to implement views using this pattern.
 
 ## Approach 1: Conditional Rendering with Extracted UI Components
 
