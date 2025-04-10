@@ -1,622 +1,563 @@
-# Apollo iOS Integration Guide for API Core Kit
+# Apollo iOS Integration for API Core Kit
 
 ## 1. Introduction
 
-This document outlines the process of integrating Apollo iOS into our existing API Core Kit to add GraphQL support while maintaining our current architecture patterns. The key goals of this integration are:
+This document outlines the process for integrating the Apollo iOS library into our existing API Core Kit to support GraphQL operations. The primary goal is to add GraphQL support using Apollo client while ensuring we maintain our current architecture's abstraction levels. This integration will:
 
-- Add comprehensive GraphQL support to our networking layer
-- Leverage Apollo iOS for type-safe GraphQL operations
-- Maintain the existing abstraction layers and patterns
-- Keep Apollo-specific types and interfaces hidden from Feature API Kits
-- Ensure a consistent developer experience regardless of the underlying protocol (REST or GraphQL)
+- Add GraphQL capabilities alongside existing REST functionality
+- Hide Apollo-specific types/interfaces from the rest of the application
+- Maintain the existing architecture patterns and abstractions
+- Allow Feature API Kits to utilize GraphQL without direct Apollo dependencies
 
 ## 2. Apollo iOS Integration Steps
 
 ### 2.1 Adding Apollo iOS to the Project
 
-1. Add Apollo iOS as a dependency using Swift Package Manager:
+1. Add Apollo iOS via Swift Package Manager:
    ```
-   File > Add Packages... > Search or Enter Package URL > https://github.com/apollographql/apollo-ios.git
+   Dependencies > + Button > Search "https://github.com/apollographql/apollo-ios.git" > Up to Next Major Version (4.0.0 < 5.0.0)
    ```
-   - Set the dependency rule to: Up to Next Major Version (4.0.0 < 5.0.0)
-   - Select the API Core Kit target as the target for this package
 
-2. Add Apollo iOS CLI for code generation:
+2. Select the API Core Kit target to add the Apollo dependency.
+
+3. Create an Apollo directory in the API Core Kit module:
+   ```
+   APIKit/
+     ├── Core/
+     ├── Apollo/
+     ├── REST/
+     └── ...
+   ```
+
+4. Set up the Apollo CLI for code generation:
    ```bash
    mkdir -p scripts
    curl -L https://install.apollo.dev/ios/latest | bash
    ```
 
-3. Add a Run Script Phase to your target's Build Phases:
-   ```bash
-   cd "${SRCROOT}"
-   ./scripts/apollo-ios-cli generate
-   ```
+5. Add the Apollo CLI script to your project's build phases for code generation (see section 5 for details).
 
 ### 2.2 Setting Up Apollo Client Within API Core Kit
 
-Create a new `ApolloProvider` class within the API Core Kit to encapsulate Apollo client functionality:
+1. Create an `ApolloClientProvider` as an implementation of a `GraphQLClientProvider` protocol:
 
-```swift
-// Private implementation file, not exposed in public API
-final class ApolloProvider {
-    private let apolloClient: ApolloClient
-    
-    init(url: URL, configuration: URLSessionConfiguration = .default) {
-        let store = ApolloStore()
-        let interceptorProvider = DefaultInterceptorProvider(store: store)
-        let networkTransport = RequestChainNetworkTransport(
-            interceptorProvider: interceptorProvider,
-            endpointURL: url
-        )
-        
-        self.apolloClient = ApolloClient(
-            networkTransport: networkTransport,
-            store: store
-        )
-    }
-    
-    // Methods to perform queries/mutations will be added here
-}
-```
+   ```swift
+   protocol GraphQLClientProvider {
+       func execute<Query: GraphQLQueryProtocol>(query: Query) async throws -> GraphQLResult
+       func perform<Mutation: GraphQLMutationProtocol>(mutation: Mutation) async throws -> GraphQLResult
+       // Other necessary methods
+   }
+   
+   class ApolloClientProvider: GraphQLClientProvider {
+       private let client: ApolloClient
+       
+       init(url: URL, interceptors: [ApolloInterceptor] = []) {
+           let store = ApolloStore()
+           let provider = NetworkInterceptorProvider(store: store, client: URLSessionClient(), interceptors: interceptors)
+           let transport = RequestChainNetworkTransport(
+               interceptorProvider: provider,
+               endpointURL: url
+           )
+           self.client = ApolloClient(networkTransport: transport, store: store)
+       }
+       
+       func execute<Query: GraphQLQueryProtocol>(query: Query) async throws -> GraphQLResult {
+           // Implementation using Apollo client
+       }
+       
+       func perform<Mutation: GraphQLMutationProtocol>(mutation: Mutation) async throws -> GraphQLResult {
+           // Implementation using Apollo client
+       }
+   }
+   ```
+
+2. Register the `ApolloClientProvider` with the API Core Kit:
+
+   ```swift
+   // In the APICore configuration
+   public class APIConfiguration {
+       let graphQLClientProvider: GraphQLClientProvider
+       
+       public init(
+           baseURL: URL,
+           graphQLURL: URL,
+           // Other parameters
+       ) {
+           self.graphQLClientProvider = ApolloClientProvider(url: graphQLURL)
+           // Other initialization
+       }
+   }
+   ```
 
 ## 3. Maintaining Abstraction
 
-### 3.1 Hiding Apollo Client Types and Interfaces
+### 3.1 Hiding Apollo Types
 
-To keep Apollo types hidden from the rest of the application, we'll create wrapper classes and protocols that fit within our existing architecture:
+1. Create domain-specific protocols and types to wrap Apollo functionality:
 
-1. Create a `GraphQLAdapter` class that converts between our internal types and Apollo types:
+   ```swift
+   // In API Core Kit
+   public protocol GraphQLOperation {
+       associatedtype ResultType
+       var operationType: GraphQLOperationType { get }
+       var operationString: String { get }
+       var variables: [String: Any]? { get }
+   }
+   
+   public enum GraphQLOperationType {
+       case query
+       case mutation
+       case subscription
+   }
+   
+   public struct GraphQLResult {
+       public let data: Any?
+       public let errors: [GraphQLError]?
+       
+       // Methods to extract typed data
+       public func get<T>(_ type: T.Type) -> T?
+   }
+   
+   public struct GraphQLError {
+       public let message: String
+       public let locations: [SourceLocation]?
+       public let path: [String]?
+       public let extensions: [String: Any]?
+   }
+   ```
 
-```swift
-// Internal to API Core Kit
-final class GraphQLAdapter {
-    private let apolloProvider: ApolloProvider
-    
-    init(apolloProvider: ApolloProvider) {
-        self.apolloProvider = apolloProvider
-    }
-    
-    func execute<T: Decodable>(_ request: GraphQLRequest<T>, completion: @escaping (Result<Response<T>, Error>) -> Void) {
-        // This will convert our GraphQLRequest to Apollo's Query/Mutation and handle the response
-    }
-}
-```
+2. Create a `GraphQLRequest` implementation of the existing `Request` protocol:
 
-2. Extend the existing `NetworkingProvider` protocol to support GraphQL operations without exposing Apollo:
+   ```swift
+   public struct GraphQLRequest<Operation: GraphQLOperation>: Request {
+       public typealias ResponseType = GraphQLResult
+       
+       private let operation: Operation
+       
+       public init(operation: Operation) {
+           self.operation = operation
+       }
+       
+       // Implement Request protocol methods
+   }
+   ```
 
-```swift
-// Public API
-extension NetworkingProvider {
-    func executeGraphQL<T: Decodable>(_ request: GraphQLRequest<T>, completion: @escaping (Result<Response<T>, Error>) -> Void) {
-        // Implementation will differ based on the concrete provider
-    }
-}
-```
+### 3.2 Creating Abstraction Layers
 
-### 3.2 Creating Wrapper Classes and Protocols
+1. Add a `GraphQLClient` class that uses the `GraphQLClientProvider` but exposes API Core Kit types:
 
-1. Implement a concrete `GraphQLRequest` type that conforms to our existing `Request` protocol:
+   ```swift
+   class GraphQLClient {
+       private let provider: GraphQLClientProvider
+       
+       init(provider: GraphQLClientProvider) {
+           self.provider = provider
+       }
+       
+       func execute<O: GraphQLOperation>(operation: O) async throws -> GraphQLResult {
+           // Convert between API Core Kit types and Apollo types
+       }
+   }
+   ```
 
-```swift
-// Public API
-public struct GraphQLRequest<ResponseType: Decodable>: Request {
-    public typealias Response = ResponseType
-    
-    public let operationType: GraphQLOperationType
-    public let operationName: String
-    public let query: String
-    public let variables: [String: Any]?
-    
-    public init(
-        operationType: GraphQLOperationType,
-        operationName: String,
-        query: String,
-        variables: [String: Any]? = nil
-    ) {
-        self.operationType = operationType
-        self.operationName = operationName
-        self.query = query
-        self.variables = variables
-    }
-}
+2. Update the `APIClient` to handle GraphQL requests:
 
-public enum GraphQLOperationType {
-    case query
-    case mutation
-    case subscription
-}
-```
-
-2. Create a `GraphQLOperation` protocol that Feature API Kits can use to define their operations:
-
-```swift
-// Public API
-public protocol GraphQLOperation {
-    associatedtype ResponseType: Decodable
-    
-    var operationType: GraphQLOperationType { get }
-    var operationName: String { get }
-    var query: String { get }
-    var variables: [String: Any]? { get }
-}
-
-// Extension to convert a GraphQLOperation to a GraphQLRequest
-public extension GraphQLOperation {
-    func asRequest() -> GraphQLRequest<ResponseType> {
-        return GraphQLRequest(
-            operationType: operationType,
-            operationName: operationName,
-            query: query,
-            variables: variables
-        )
-    }
-}
-```
+   ```swift
+   public class APIClient {
+       private let restClient: RESTClient
+       private let graphQLClient: GraphQLClient
+       
+       public func send<R: Request>(_ request: R) async throws -> R.ResponseType {
+           if let graphQLRequest = request as? GraphQLRequest<any GraphQLOperation> {
+               return try await handleGraphQLRequest(graphQLRequest)
+           } else {
+               return try await restClient.send(request)
+           }
+       }
+       
+       private func handleGraphQLRequest<O: GraphQLOperation>(_ request: GraphQLRequest<O>) async throws -> GraphQLResult {
+           // Implementation
+       }
+   }
+   ```
 
 ## 4. Handling GraphQL Requests and Responses
 
 ### 4.1 Creating GraphQL Requests in Feature API Kits
 
-Feature API Kits will define specific operations by conforming to the `GraphQLOperation` protocol:
+Feature API Kits will define GraphQL operations using `.graphql` files, but will wrap the generated operations in their own types:
 
 ```swift
-// In a Feature API Kit
-struct GetUserProfileOperation: GraphQLOperation {
-    typealias ResponseType = UserProfile
+// In UserFeatureKit
+
+// The .graphql file:
+// query GetUser($id: ID!) {
+//   user(id: $id) {
+//     id
+//     name
+//     email
+//   }
+// }
+
+struct GetUserOperation: GraphQLOperation {
+    typealias ResultType = User
     
-    let operationType: GraphQLOperationType = .query
-    let operationName: String = "GetUserProfile"
-    let query: String = """
-    query GetUserProfile($id: ID!) {
-      user(id: $id) {
-        id
-        name
-        email
-        profilePicture
-      }
-    }
-    """
+    let id: String
     
-    let variables: [String: Any]?
-    
-    init(userId: String) {
-        self.variables = ["id": userId]
-    }
+    var operationType: GraphQLOperationType { .query }
+    var operationString: String { GetUserQuery.operationString }
+    var variables: [String: Any]? { ["id": id] }
 }
 
-// Usage in the feature code
-let operation = GetUserProfileOperation(userId: "123")
-let request = operation.asRequest()
-
-apiClient.send(request) { result in
-    switch result {
-    case .success(let response):
-        // Handle the UserProfile object
-    case .failure(let error):
-        // Handle error
+struct UserAPI {
+    private let apiClient: APIClient
+    
+    func getUser(id: String) async throws -> User {
+        let operation = GetUserOperation(id: id)
+        let request = GraphQLRequest(operation: operation)
+        let result = try await apiClient.send(request)
+        
+        guard let user = result.get(User.self) else {
+            throw APIError.parsingFailed
+        }
+        
+        return user
     }
 }
 ```
 
-### 4.2 Processing Requests Using Apollo Client
+### 4.2 Processing GraphQL Requests
 
-Within the `GraphQLAdapter`, we'll process the requests using Apollo client:
+The API Core Kit will process GraphQL requests by:
+
+1. Extracting the operation details
+2. Converting to Apollo's query/mutation types
+3. Executing via the Apollo client
+4. Converting the response back to API Core Kit types
 
 ```swift
-func execute<T: Decodable>(_ request: GraphQLRequest<T>, completion: @escaping (Result<Response<T>, Error>) -> Void) {
-    switch request.operationType {
+private func handleGraphQLRequest<O: GraphQLOperation>(_ request: GraphQLRequest<O>) async throws -> GraphQLResult {
+    let operation = request.operation
+    
+    switch operation.operationType {
     case .query:
-        executeQuery(request, completion: completion)
+        // Convert to Apollo query and execute
+        let result = try await graphQLClient.execute(operation: operation)
+        return result
+        
     case .mutation:
-        executeMutation(request, completion: completion)
+        // Convert to Apollo mutation and execute
+        let result = try await graphQLClient.perform(operation: operation)
+        return result
+        
     case .subscription:
-        // Subscriptions are handled differently and may require WebSocket transport
-        executeSubscription(request, completion: completion)
+        throw APIError.unsupportedOperationType
     }
 }
-
-private func executeQuery<T: Decodable>(_ request: GraphQLRequest<T>, completion: @escaping (Result<Response<T>, Error>) -> Void) {
-    // Convert our request to Apollo Query
-    let queryDocument = try? ApolloAPI.DocumentNode(definition: request.query)
-    guard let queryDocument else {
-        completion(.failure(APIError.invalidRequest))
-        return
-    }
-    
-    // Execute the query
-    apolloProvider.apolloClient.fetch(query: ApolloAPI.GraphQLRequest(
-        document: queryDocument,
-        operation: request.operationName,
-        variables: request.variables,
-        responseCodegenConfiguration: .init())
-    ) { result in
-        self.handleApolloResult(result, completion: completion)
-    }
-}
-
-// Similar methods for executeMutation and executeSubscription
 ```
 
-### 4.3 Converting Apollo Responses
+### 4.3 Response Conversion
 
-Convert Apollo responses to our internal `Response` format:
+When converting Apollo responses to the API Core Kit format:
 
 ```swift
-private func handleApolloResult<T: Decodable>(_ result: Result<GraphQLResult<ApolloAPI.JSONObject>, Error>, completion: @escaping (Result<Response<T>, Error>) -> Void) {
-    switch result {
-    case .success(let graphQLResult):
-        if let errors = graphQLResult.errors, !errors.isEmpty {
-            // Handle GraphQL errors
-            let apiError = self.convertGraphQLErrors(errors)
-            completion(.failure(apiError))
-            return
+// Inside ApolloClientProvider
+func execute<Query: GraphQLQueryProtocol>(query: Query) async throws -> GraphQLResult {
+    return try await withCheckedThrowingContinuation { continuation in
+        client.fetch(query: query) { result in
+            switch result {
+            case .success(let apolloResult):
+                let convertedResult = self.convertApolloResult(apolloResult)
+                continuation.resume(returning: convertedResult)
+                
+            case .failure(let error):
+                continuation.resume(throwing: self.convertApolloError(error))
+            }
         }
-        
-        guard let data = graphQLResult.data else {
-            completion(.failure(APIError.noData))
-            return
-        }
-        
-        do {
-            // Convert ApolloAPI.JSONObject to our model type T
-            let jsonData = try JSONSerialization.data(withJSONObject: data)
-            let decoder = JSONDecoder()
-            let decodedData = try decoder.decode(T.self, from: jsonData)
-            
-            // Create our Response type
-            let response = Response(
-                data: decodedData,
-                metadata: ResponseMetadata(
-                    statusCode: 200,
-                    headers: [:] // Add any relevant headers from the GraphQL response
-                )
-            )
-            
-            completion(.success(response))
-        } catch {
-            completion(.failure(APIError.decodingFailed(error)))
-        }
-        
-    case .failure(let error):
-        // Convert Apollo error to our Error type
-        completion(.failure(self.convertApolloError(error)))
     }
+}
+
+private func convertApolloResult<T>(_ apolloResult: GraphQLResult<T>) -> GraphQLResult {
+    return GraphQLResult(
+        data: apolloResult.data,
+        errors: apolloResult.errors?.map { self.convertGraphQLError($0) }
+    )
+}
+
+private func convertGraphQLError(_ error: Apollo.GraphQLError) -> GraphQLError {
+    return GraphQLError(
+        message: error.message,
+        locations: error.locations?.map { SourceLocation(line: $0.line, column: $0.column) },
+        path: error.path,
+        extensions: error.extensions
+    )
 }
 ```
 
 ### 4.4 Error Handling
 
-Implement error handling that converts Apollo errors to our API Core Kit error format:
+Create a mapping between Apollo errors and API Core Kit errors:
 
 ```swift
-private func convertGraphQLErrors(_ errors: [GraphQLError]) -> Error {
-    // Extract relevant information from GraphQL errors
-    // and convert to our own error type
-    return APIError.serverError(
-        message: errors.map { $0.message }.joined(separator: ", "),
-        code: "GRAPHQL_ERROR"
-    )
-}
-
 private func convertApolloError(_ error: Error) -> Error {
-    // Convert Apollo specific errors to our error type
-    if let apolloError = error as? Apollo.ResponseCodeableError {
-        return APIError.networkError(apolloError)
+    if let apolloError = error as? Apollo.GraphQLError {
+        return APIError.graphQLError(convertGraphQLError(apolloError))
+    } else if let networkError = error as? Apollo.NetworkError {
+        switch networkError {
+        case .transportFailure(let underlying):
+            return APIError.networkError(underlying)
+        case .noData:
+            return APIError.emptyResponse
+        case .parseError:
+            return APIError.parsingFailed
+        default:
+            return APIError.unknown(error)
+        }
+    } else {
+        return APIError.unknown(error)
     }
-    
-    return APIError.unknownError(error)
 }
 ```
 
 ## 5. Apollo Script Usage
 
-### 5.1 Using Apollo Codegen
+### 5.1 GraphQL Schema and Operations
 
-1. Create a configuration file at the root of your project named `apollo-codegen.yml`:
+1. Set up your project structure:
+   ```
+   YourProject/
+     ├── graphql/
+     │   ├── schema.graphql           // Your GraphQL schema
+     │   └── apollo-codegen-config.json  // Apollo configuration
+     └── Features/
+         ├── UserFeature/
+         │   └── GraphQL/
+         │       ├── GetUser.graphql
+         │       └── UpdateUser.graphql
+         └── PostFeature/
+             └── GraphQL/
+                 ├── GetPosts.graphql
+                 └── CreatePost.graphql
+   ```
 
-```yaml
-schema:
-  - schema.graphql
-operations:
-  - "**/*.graphql"
-targetName: MyApp
-output: ./MyApp/Generated/
-```
+2. Create the `apollo-codegen-config.json` file:
+   ```json
+   {
+     "schemaName": "YourAPI",
+     "input": {
+       "operationSearchPaths": ["./Features/**/GraphQL/*.graphql"],
+       "schemaSearchPaths": ["./graphql/schema.graphql"]
+     },
+     "output": {
+       "testMocks": {
+         "none": {}
+       },
+       "schemaTypes": {
+         "path": "./APIKit/Apollo/SchemaTypes.swift",
+         "moduleType": {
+           "swiftPackageManager": {}
+         }
+       },
+       "operations": {
+         "inSchemaModule": {}
+       }
+     }
+   }
+   ```
 
-2. Create a schema file (`schema.graphql`) by fetching it from your GraphQL server:
+3. Add a build script phase to your project:
+   ```bash
+   cd "${SRCROOT}"
+   ./scripts/apollo-ios-cli generate
+   ```
 
-```bash
-./scripts/apollo-ios-cli download-schema --endpoint=https://api.example.com/graphql
-```
+### 5.2 Generated Files Placement
 
-3. Create `.graphql` files for your queries, mutations, and subscriptions in appropriate Feature API Kit directories:
-
-```graphql
-# UserKit/GraphQL/UserQueries.graphql
-query GetUserProfile($id: ID!) {
-  user(id: $id) {
-    id
-    name
-    email
-    profilePicture
-  }
-}
-```
-
-4. Run the code generation:
-
-```bash
-./scripts/apollo-ios-cli generate
-```
-
-### 5.2 Organizing Generated Files
-
-1. Generated files should be placed within Feature Kits in a `Generated` directory:
-
-```
-MyApp/
-├── API Core Kit/
-│   └── ...
-├── Feature Kits/
-│   ├── UserKit/
-│   │   ├── GraphQL/
-│   │   │   └── UserQueries.graphql
-│   │   └── Generated/
-│   │       └── UserAPI.swift
-│   └── ProductKit/
-│       ├── GraphQL/
-│       │   └── ProductQueries.graphql
-│       └── Generated/
-│           └── ProductAPI.swift
-└── ...
-```
-
-2. Modify the `apollo-codegen.yml` to generate files in the appropriate locations:
-
-```yaml
-schema:
-  - schema.graphql
-operations:
-  - "Feature Kits/UserKit/GraphQL/*.graphql"
-  - "Feature Kits/ProductKit/GraphQL/*.graphql"
-targetName: MyApp
-output:
-  - targetName: UserKit
-    path: ./Feature Kits/UserKit/Generated/
-    operations:
-      - "Feature Kits/UserKit/GraphQL/*.graphql"
-  - targetName: ProductKit
-    path: ./Feature Kits/ProductKit/Generated/
-    operations:
-      - "Feature Kits/ProductKit/GraphQL/*.graphql"
-```
+1. The Apollo code generation will create Swift files in the paths defined in the configuration
+2. The generated `SchemaTypes.swift` will be placed in the API Core Kit's Apollo directory
+3. Feature-specific operations will be placed in their respective Feature Kit's GraphQL directory
 
 ## 6. Future-proofing Considerations
 
-### 6.1 Minimizing Impact of Switching GraphQL Clients
+### 6.1 Minimizing Impact of Client Changes
 
-1. Keep all Apollo-specific code within the API Core Kit, specifically in adapter classes.
-2. Use our own abstractions (protocols and models) for GraphQL operations.
-3. Create a clear interface boundary that would allow replacing the underlying GraphQL client:
+1. **Strict Protocol Boundaries**: Keep all Apollo-specific code behind clearly defined protocols like `GraphQLClientProvider`.
 
-```swift
-// Public protocol - independent of Apollo
-public protocol GraphQLClientProvider {
-    func executeQuery<T: Decodable>(_ request: GraphQLRequest<T>, completion: @escaping (Result<Response<T>, Error>) -> Void)
-    func executeMutation<T: Decodable>(_ request: GraphQLRequest<T>, completion: @escaping (Result<Response<T>, Error>) -> Void)
-    func executeSubscription<T: Decodable>(_ request: GraphQLRequest<T>, completion: @escaping (Result<Response<T>, Error>) -> Void)
-}
+2. **Dependency Injection**: Inject the GraphQL client into your `APIClient` rather than instantiating it directly.
 
-// Internal implementation using Apollo
-final class ApolloGraphQLClientProvider: GraphQLClientProvider {
-    private let apolloProvider: ApolloProvider
-    
-    init(apolloProvider: ApolloProvider) {
-        self.apolloProvider = apolloProvider
-    }
-    
-    // Implement the protocol methods using Apollo
-}
-```
+3. **Wrapper Types**: Maintain your own wrappers for all Apollo types, especially those exposed to Feature Kits.
 
-### 6.2 Maintaining Clean Separation
+4. **Abstract Factory Pattern**: Consider using a factory for creating GraphQL operations that could adapt to different underlying implementations.
 
-1. Keep Apollo imports strictly confined to adapter implementation files.
-2. Never expose Apollo types in public interfaces:
+5. **Separate Build Target**: Place all Apollo-specific code in a separate build target that only API Core Kit depends on.
 
-```swift
-// WRONG:
-public func process(result: GraphQLResult<Data>) // Exposing Apollo types
+### 6.2 Best Practices for Clean Separation
 
-// RIGHT:
-public func process(result: Result<Response<UserProfile>, Error>) // Using our own types
-```
+1. **Package Structure**:
+   ```
+   APIKit/
+     ├── Public/          // Public interfaces used by Feature Kits
+     ├── Core/            // Common networking functionality
+     ├── Apollo/          // Apollo-specific implementation (internal)
+     └── REST/            // REST-specific implementation (internal)
+   ```
 
-3. Use feature toggles to enable GraphQL functionality:
+2. **Apollo-specific Code Isolation**:
+   - Keep all Apollo imports restricted to the Apollo directory
+   - Never expose Apollo types in public interfaces
+   - Use protocol extensions to add Apollo-specific functionality without exposing it
 
-```swift
-public class APIClient {
-    private let restProvider: RESTProvider
-    private let graphQLProvider: GraphQLClientProvider?
-    
-    public init(
-        restProvider: RESTProvider,
-        graphQLProvider: GraphQLClientProvider? = nil
-    ) {
-        self.restProvider = restProvider
-        self.graphQLProvider = graphQLProvider
-    }
-    
-    public func send<T: Request>(_ request: T, completion: @escaping (Result<T.Response, Error>) -> Void) {
-        if let graphQLRequest = request as? GraphQLRequest<T.Response>, 
-           let graphQLProvider = graphQLProvider {
-            // Use GraphQL
-            graphQLProvider.executeQuery(graphQLRequest, completion: completion)
-        } else {
-            // Fall back to REST
-            restProvider.execute(request, completion: completion)
-        }
-    }
-}
-```
+3. **Automated Compliance Testing**:
+   - Create unit tests that verify Feature Kits aren't directly using Apollo types
+   - Set up build time checks to ensure proper layer isolation
 
 ## 7. Sample Code
 
 ### 7.1 Apollo Client Wrapper
 
 ```swift
-// Internal to API Core Kit - not exposed in public API
-final class ApolloClientWrapper {
-    private let apolloClient: ApolloClient
+import Apollo
+import Foundation
+
+protocol GraphQLClientProvider {
+    func execute<Operation: GraphQLOperation>(operation: Operation) async throws -> GraphQLResult
+}
+
+// Concrete Apollo implementation
+class ApolloGraphQLProvider: GraphQLClientProvider {
+    private let client: ApolloClient
     
-    init(serverURL: URL) {
-        let store = ApolloStore()
-        let provider = NetworkInterceptorProvider(store: store, serverURL: serverURL)
-        let transport = RequestChainNetworkTransport(
-            interceptorProvider: provider,
-            endpointURL: serverURL
-        )
-        self.apolloClient = ApolloClient(networkTransport: transport, store: store)
+    init(url: URL) {
+        self.client = ApolloClient(url: url)
     }
     
-    func fetch<Query: GraphQLQuery>(
-        query: Query,
-        cachePolicy: CachePolicy = .default,
-        contextIdentifier: UUID? = nil,
-        queue: DispatchQueue = .main,
-        completion: @escaping (Result<Query.Data, Error>) -> Void
-    ) {
-        apolloClient.fetch(
-            query: query,
-            cachePolicy: cachePolicy,
-            contextIdentifier: contextIdentifier,
-            queue: queue
-        ) { result in
-            switch result {
-            case .success(let graphQLResult):
-                if let errors = graphQLResult.errors, !errors.isEmpty {
-                    // Handle GraphQL errors
-                    let combinedMessage = errors.map { $0.message ?? "Unknown error" }.joined(separator: ", ")
-                    completion(.failure(APIError.graphQLError(message: combinedMessage)))
-                    return
-                }
-                
-                if let data = graphQLResult.data {
-                    completion(.success(data))
-                } else {
-                    completion(.failure(APIError.noData))
-                }
-                
-            case .failure(let error):
-                completion(.failure(error))
+    func execute<Operation: GraphQLOperation>(operation: Operation) async throws -> GraphQLResult {
+        switch operation.operationType {
+        case .query:
+            return try await executeQuery(operation)
+        case .mutation:
+            return try await executeMutation(operation)
+        case .subscription:
+            throw APIError.unsupportedOperationType
+        }
+    }
+    
+    private func executeQuery<Operation: GraphQLOperation>(_ operation: Operation) async throws -> GraphQLResult {
+        // Convert operation to Apollo query and execute
+        let queryDocument = operation.operationString
+        let variables = operation.variables
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            client.fetch(query: ApolloQueryHelper.createQuery(queryDocument, variables: variables)) { result in
+                // Convert result to GraphQLResult and resume continuation
+                // Implementation details omitted for brevity
             }
         }
     }
     
-    // Similar methods for mutations and subscriptions
+    private func executeMutation<Operation: GraphQLOperation>(_ operation: Operation) async throws -> GraphQLResult {
+        // Similar implementation to executeQuery but for mutations
+    }
 }
 ```
 
-### 7.2 Example of a GraphQL Request in a Feature API Kit
+### 7.2 Example GraphQL Request in Feature API Kit
 
 ```swift
 // In UserFeatureKit
-struct UserProfileRequest: GraphQLOperation {
-    typealias ResponseType = UserProfile
+import APICore
+
+// Define operation
+struct GetUserProfileOperation: GraphQLOperation {
+    typealias ResultType = UserProfile
     
-    let operationType: GraphQLOperationType = .query
-    let operationName: String = "GetUserProfile"
-    let query: String
-    let variables: [String: Any]?
+    let userId: String
     
-    init(userId: String) {
-        self.query = """
-        query GetUserProfile($id: ID!) {
-          user(id: $id) {
+    var operationType: GraphQLOperationType { .query }
+    var operationString: String {
+        """
+        query GetUserProfile($userId: ID!) {
+          userProfile(id: $userId) {
             id
             name
             email
-            profilePicture
+            avatarUrl
           }
         }
         """
-        self.variables = ["id": userId]
     }
+    var variables: [String: Any]? { ["userId": userId] }
 }
 
-// Usage example
-func fetchUserProfile(userId: String, completion: @escaping (Result<UserProfile, Error>) -> Void) {
-    let request = UserProfileRequest(userId: userId).asRequest()
-    apiClient.send(request, completion: completion)
+// Use in API service
+class UserService {
+    private let apiClient: APIClient
+    
+    init(apiClient: APIClient) {
+        self.apiClient = apiClient
+    }
+    
+    func getUserProfile(userId: String) async throws -> UserProfile {
+        let operation = GetUserProfileOperation(userId: userId)
+        let request = GraphQLRequest(operation: operation)
+        
+        let result = try await apiClient.send(request)
+        
+        guard let profile = result.get(UserProfile.self) else {
+            throw UserServiceError.profileNotFound
+        }
+        
+        return profile
+    }
 }
 ```
 
-### 7.3 Conversion of Apollo Response to Required Response Format
+### 7.3 Converting Apollo Response to API Core Kit Response
 
 ```swift
-// Inside the ApolloAdapter
-private func convertApolloResult<T: Decodable, Q: GraphQLQuery>(
-    _ result: Result<GraphQLResult<Q.Data>, Error>,
-    completion: @escaping (Result<Response<T>, Error>) -> Void
-) {
-    switch result {
-    case .success(let graphQLResult):
-        if let errors = graphQLResult.errors, !errors.isEmpty {
-            let errorMessages = errors.map { $0.message ?? "Unknown GraphQL error" }
-            completion(.failure(APIError.graphQLError(message: errorMessages.joined(separator: ", "))))
-            return
+// In ApolloGraphQLProvider.swift
+private func convertApolloResponse<T>(response: GraphQLResponse<T>) -> GraphQLResult {
+    // Extract data
+    let data = response.data
+    
+    // Convert GraphQL errors
+    let errors = response.errors?.map { apolloError in
+        GraphQLError(
+            message: apolloError.message,
+            locations: apolloError.locations?.map {
+                SourceLocation(line: $0.line, column: $0.column)
+            },
+            path: apolloError.path,
+            extensions: apolloError.extensions
+        )
+    }
+    
+    // Create the result
+    return GraphQLResult(
+        data: data,
+        errors: errors
+    )
+}
+
+// Helper for typed data extraction
+extension GraphQLResult {
+    public func get<T>(_ type: T.Type) -> T? {
+        guard let data = data else { return nil }
+        
+        // Implementation would depend on how data is structured
+        // This could use JSONSerialization and Decodable, or
+        // it could use a more sophisticated mapping approach
+        
+        if let jsonData = try? JSONSerialization.data(withJSONObject: data),
+           let result = try? JSONDecoder().decode(T.self, from: jsonData) {
+            return result
         }
         
-        guard let data = graphQLResult.data else {
-            completion(.failure(APIError.noData))
-            return
-        }
-        
-        do {
-            // Convert Apollo's typed data to a dictionary
-            let jsonObject = try Q.Data.jsonObject(data)
-            
-            // Convert to JSON data
-            let jsonData = try JSONSerialization.data(withJSONObject: jsonObject)
-            
-            // Decode to our model type
-            let decoder = JSONDecoder()
-            let model = try decoder.decode(T.self, from: jsonData)
-            
-            // Create our Response type
-            let response = Response(
-                data: model,
-                metadata: ResponseMetadata(
-                    statusCode: 200,
-                    headers: [:] // Apollo doesn't provide HTTP headers directly
-                )
-            )
-            
-            completion(.success(response))
-        } catch {
-            completion(.failure(APIError.decodingFailed(error)))
-        }
-        
-    case .failure(let error):
-        // Convert Apollo errors to our error type
-        if let apolloError = error as? Apollo.ResponseCodeableError {
-            switch apolloError {
-            case .invalidOperation:
-                completion(.failure(APIError.invalidRequest))
-            case .parsedError:
-                completion(.failure(APIError.parsingFailed))
-            case .networkError(let error):
-                completion(.failure(APIError.networkError(error)))
-            case .httpError(let response, let data):
-                let statusCode = response.statusCode
-                completion(.failure(APIError.httpError(statusCode: statusCode)))
-            default:
-                completion(.failure(APIError.unknownError(error)))
-            }
-        } else {
-            completion(.failure(APIError.unknownError(error)))
-        }
+        return nil
     }
 }
 ```
+
+---
+
+This integration approach ensures that we can leverage Apollo's powerful GraphQL capabilities while maintaining our existing API Core Kit architecture and abstraction levels. By strictly adhering to these guidelines, we keep Apollo implementation details isolated from Feature Kits, allowing us to replace or upgrade the GraphQL client in the future with minimal impact on the codebase.
