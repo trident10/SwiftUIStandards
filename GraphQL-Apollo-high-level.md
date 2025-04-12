@@ -374,23 +374,283 @@ The code generation process will:
 
 ```
 ProjectRoot/
-├── APICore/
-│   └── GraphQL/
-│       ├── GeneratedSchema/        # Apollo-generated schema files
-│       └── Infrastructure/         # Apollo client wrapper classes
+├── APICoreKit/
+│   ├── Common/
+│   │   ├── Protocols/
+│   │   │   ├── Repository.swift          # Protocol with both REST and GraphQL methods
+│   │   │   ├── Request.swift             # Base request protocol
+│   │   │   └── Response.swift            # Response structure definitions
+│   │   ├── Interceptors/
+│   │   │   ├── RequestInterceptor.swift  # Request modification before execution
+│   │   │   └── ResponseInterceptor.swift # Response processing after execution
+│   │   └── Errors/
+│   │       └── APIError.swift            # Unified error types for REST and GraphQL
+│   ├── REST/
+│   │   ├── HTTPClient.swift              # Client for REST API calls
+│   │   └── RESTRequest.swift             # REST-specific request implementation
+│   ├── GraphQL/
+│   │   ├── Client/
+│   │   │   ├── GraphQLClient.swift       # Protocol defining GraphQL client interface
+│   │   │   └── ApolloClientWrapper.swift # Apollo implementation of GraphQLClient
+│   │   ├── Infrastructure/
+│   │   │   ├── ApolloProvider.swift      # Direct Apollo client wrapper
+│   │   │   └── GraphQLErrorMapper.swift  # Maps Apollo errors to API errors
+│   │   ├── Requests/
+│   │   │   └── GraphQLRequest.swift      # GraphQL request protocol
+│   │   └── GeneratedSchema/              # Apollo-generated schema types
+│   │       ├── SchemaMetadata.swift      # Generated schema information
+│   │       ├── Objects.swift             # Generated object types
+│   │       ├── InputObjects.swift        # Generated input object types
+│   │       ├── Enums.swift               # Generated enum types
+│   │       └── Interfaces.swift          # Generated interface types
+│   └── Services/
+│       └── Service.swift                 # Implements Repository with both clients
 ├── FeatureKits/
-│   └── UserKit/
-│       ├── GraphQL/                # Feature-specific GraphQL files
-│       │   ├── Operations/         # GraphQL queries and mutations
-│       │   └── Requests/           # Request implementations
-│       └── Models/                 # Domain models
-└── schema.graphql                  # GraphQL schema
+│   └── UserKit/                          # Example feature kit
+│       ├── Repository/
+│       │   └── UserRepository.swift      # Feature-specific repository interface
+│       ├── Service/
+│       │   └── UserService.swift         # Feature-specific service implementation
+│       ├── Models/
+│       │   └── User.swift                # Domain models
+│       └── GraphQL/
+│           ├── Operations/
+│           │   └── User.graphql          # GraphQL operation definitions
+│           ├── Generated/                # Feature-specific generated operation code
+│           │   └── UserOperations.swift  # Generated from User.graphql
+│           └── Requests/
+│               └── GetUserRequest.swift  # GraphQL request implementations
+└── schema.graphql                        # Main GraphQL schema
 ```
 
-**Modular Design:**
-1. Core GraphQL infrastructure and generated schema types in API Core Kit
-2. Feature-specific operations and requests in Feature API Kits
-3. Clear separation between generated code and hand-written code
+**Apollo Generated Files Explained:**
+
+Apollo's code generation creates two types of Swift files:
+
+1. **Schema Type Definitions** (in APICoreKit):
+   - Generated from your main `schema.graphql` file
+   - Shared across all Feature Kits
+   - Placed in `APICoreKit/GraphQL/GeneratedSchema/`
+
+2. **Operation-Specific Files** (in Feature Kits):
+   - Generated from individual `.graphql` files in each Feature Kit
+   - Specific to that Feature Kit's queries/mutations
+   - Placed in each Feature Kit's `GraphQL/Generated/` directory
+
+**Example: Schema Type Definitions**
+
+For this GraphQL schema snippet:
+
+```graphql
+# schema.graphql
+type User {
+  id: ID!
+  name: String!
+  email: String!
+  role: UserRole!
+}
+
+enum UserRole {
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+input UserInput {
+  name: String!
+  email: String!
+  role: UserRole!
+}
+```
+
+Apollo would generate these types in `APICoreKit/GraphQL/GeneratedSchema/`:
+
+```swift
+// Objects.swift
+public struct User: GraphQLObject {
+  public static let typename = "User"
+  public static let possibleTypes = ["User"]
+  
+  public var id: GraphQLID { __data["id"] }
+  public var name: String { __data["name"] }
+  public var email: String { __data["email"] }
+  public var role: UserRole { __data["role"] }
+  
+  // Internal implementation details...
+}
+
+// Enums.swift
+public enum UserRole: String, GraphQLEnum {
+  case admin = "ADMIN"
+  case editor = "EDITOR"
+  case viewer = "VIEWER"
+}
+
+// InputObjects.swift
+public struct UserInput: GraphQLInputObject {
+  public var name: String
+  public var email: String
+  public var role: UserRole
+  
+  public init(name: String, email: String, role: UserRole) {
+    self.name = name
+    self.email = email
+    self.role = role
+  }
+  
+  // Internal conversion methods...
+}
+```
+
+**Example: Operation-Specific Generated Code**
+
+For a GraphQL operation in a Feature Kit:
+
+```graphql
+# UserKit/GraphQL/Operations/User.graphql
+query GetUser($id: ID!) {
+  user(id: $id) {
+    id
+    name
+    email
+    role
+  }
+}
+
+mutation CreateUser($input: UserInput!) {
+  createUser(input: $input) {
+    id
+    name
+    email
+  }
+}
+```
+
+Apollo would generate this code in `UserKit/GraphQL/Generated/UserOperations.swift`:
+
+```swift
+// UserOperations.swift
+public final class GetUserQuery: GraphQLQuery {
+  public static let operationName: String = "GetUser"
+  public static let document: DocumentType = .notPersisted(
+    definition: "query GetUser($id: ID!) { user(id: $id) { id name email role } }"
+  )
+  
+  public var id: GraphQLID
+  
+  public init(id: GraphQLID) {
+    self.id = id
+  }
+  
+  public var variables: GraphQLMap? {
+    return ["id": id]
+  }
+  
+  public struct Data: GraphQLSelectionSet {
+    public var user: User?
+    
+    // Selection set implementation...
+  }
+}
+
+public final class CreateUserMutation: GraphQLMutation {
+  public static let operationName: String = "CreateUser"
+  public static let document: DocumentType = .notPersisted(
+    definition: "mutation CreateUser($input: UserInput!) { createUser(input: $input) { id name email } }"
+  )
+  
+  public var input: UserInput
+  
+  public init(input: UserInput) {
+    self.input = input
+  }
+  
+  public var variables: GraphQLMap? {
+    return ["input": input]
+  }
+  
+  public struct Data: GraphQLSelectionSet {
+    public var createUser: User
+    
+    // Selection set implementation...
+  }
+}
+```
+
+**Using Generated Code in Feature Kit Requests:**
+
+```swift
+// UserKit/GraphQL/Requests/GetUserRequest.swift
+import APICoreKit
+// This import gives access to the schema types and the repository pattern
+import UserKitGenerated 
+// This import gives access to the operation-specific generated code
+
+public struct GetUserRequest: GraphQLRequest {
+    public typealias Operation = GetUserQuery
+    public typealias ResponseData = UserDomainModel
+    
+    private let userId: String
+    
+    public init(userId: String) {
+        self.userId = userId
+    }
+    
+    public var operation: Operation {
+        return GetUserQuery(id: userId)
+    }
+    
+    public func map(data: Operation.Data) throws -> UserDomainModel {
+        guard let userData = data.user else {
+            throw APIError.responseMappingFailed("User data not found")
+        }
+        
+        return UserDomainModel(
+            id: userData.id,
+            name: userData.name,
+            email: userData.email,
+            role: mapRole(userData.role)
+        )
+    }
+    
+    private func mapRole(_ graphQLRole: UserRole) -> UserDomainModel.Role {
+        switch graphQLRole {
+        case .admin: return .administrator
+        case .editor: return .contentEditor
+        case .viewer: return .readOnlyUser
+        }
+    }
+}
+```
+
+This approach provides a clean separation between:
+1. **Schema Types**: Shared, reusable types based on your GraphQL schema (in APICoreKit)
+2. **Operation Code**: Feature-specific query/mutation classes (in each Feature Kit)
+3. **Request Implementations**: Your custom code that connects Apollo operations to your domain models
+
+To configure Apollo codegen for this structure, use:
+
+```json
+{
+  "schemaNamespace": "GraphQLAPI",
+  "input": {
+    "operationSearchPaths": ["**/*.graphql"],
+    "schemaSearchPaths": ["schema.graphql"]
+  },
+  "output": {
+    "schemaTypes": {
+      "path": "./APICoreKit/GraphQL/GeneratedSchema",
+      "moduleType": {
+        "swiftPackageManager": {}
+      }
+    },
+    "operations": {
+      "relative": true,
+      "relativeOutputPath": "./Generated"
+    }
+  }
+}
+```
 
 ## 6. Future-proofing Considerations
 
