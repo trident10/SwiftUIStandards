@@ -179,41 +179,94 @@ Feature API Kits will:
 **Request Flow:**
 
 ```
-┌───────────┐     ┌───────────────┐     ┌───────────────┐     ┌───────────┐
-│           │     │               │     │               │     │           │
-│  Feature  │     │  API Client   │     │  GraphQL      │     │  Apollo   │
-│  API Kit  │     │               │     │  Provider     │     │  Client   │
-│           │     │               │     │               │     │           │
-└─────┬─────┘     └───────┬───────┘     └───────┬───────┘     └─────┬─────┘
-      │                   │                     │                   │
-      │ GraphQLRequest    │                     │                   │
-      ├───────────────────►                     │                   │
-      │                   │                     │                   │
-      │                   │ Request Interceptors│                   │
-      │                   ├────────────────────►│                   │
-      │                   │                     │                   │
-      │                   │                     │ Apollo Operation  │
-      │                   │                     ├───────────────────►
-      │                   │                     │                   │
-      │                   │                     │  Apollo Result    │
-      │                   │                     │◄───────────────────
-      │                   │                     │                   │
-      │                   │ Response            │                   │
-      │                   │◄────────────────────┤                   │
-      │                   │                     │                   │
-      │                   │ Response Interceptors                   │
-      │                   ├─────────────────────┤                   │
-      │                   │                     │                   │
-      │ Domain Response   │                     │                   │
-      │◄───────────────────                     │                   │
-      │                   │                     │                   │
+┌───────────────┐     ┌───────────────┐     ┌───────────────┐     ┌───────────┐
+│               │     │               │     │               │     │           │
+│  Feature      │     │  Repository/  │     │  GraphQL      │     │  Apollo   │
+│  API Kit      │     │  Service      │     │  Client       │     │  Client   │
+│               │     │               │     │               │     │           │
+└─────┬─────────┘     └───────┬───────┘     └───────┬───────┘     └─────┬─────┘
+      │                       │                     │                   │
+      │ 1. Feature creates    │                     │                   │
+      │ GraphQLRequest        │                     │                   │
+      ├───────────────────────►                     │                   │
+      │                       │                     │                   │
+      │                       │ 2. Apply Request    │                   │
+      │                       │ Interceptors        │                   │
+      │                       ├────────────────────►│                   │
+      │                       │                     │                   │
+      │                       │                     │ 3. Convert to     │
+      │                       │                     │ Apollo Operation  │
+      │                       │                     ├───────────────────►
+      │                       │                     │                   │
+      │                       │                     │ 4. Apollo Result  │
+      │                       │                     │◄───────────────────
+      │                       │                     │                   │
+      │                       │ 5. Response with    │                   │
+      │                       │ mapped data         │                   │
+      │                       │◄────────────────────┤                   │
+      │                       │                     │                   │
+      │                       │ 6. Apply Response   │                   │
+      │                       │ Interceptors        │                   │
+      │                       │                     │                   │
+      │ 7. Domain Response    │                     │                   │
+      │◄───────────────────────                     │                   │
+      │                       │                     │                   │
 ```
 
-The `APIClient` will:
-1. Apply request interceptors
-2. Route the request to the GraphQL provider
-3. Apply response interceptors
-4. Return the mapped domain response
+**Detailed Process Flow:**
+
+1. **GraphQL Request Creation in Feature Kit**:
+   - Feature Kit defines GraphQL operations in `.graphql` files
+   - Apollo codegen generates Swift types for these operations during build
+   - Feature Kit creates a request that conforms to `GraphQLRequest` protocol
+   - This request encapsulates:
+     - Input parameters for the GraphQL operation
+     - Reference to generated Apollo operation type
+     - Mapping logic from GraphQL response to domain model
+
+2. **Request Submission to Repository/Service**:
+   - Feature Kit calls the GraphQL method on Repository interface
+   - Service implementation receives the request
+
+3. **Request Interceptor Processing**:
+   - Request interceptors are applied in sequence to the GraphQL request
+   - Common interceptors include:
+     - Authentication: Adding authorization headers
+     - Logging: Recording request details for debugging
+     - Caching: Setting cache policies for the request
+     - Metrics: Adding timing and performance tracking
+   - Each interceptor can modify the request before it proceeds
+
+4. **GraphQL Client Processing**:
+   - Service delegates to the GraphQLClient (Apollo wrapper)
+   - GraphQLClient extracts the operation from the request
+   - Converts our domain request to Apollo-specific operation format
+
+5. **Apollo Client Execution**:
+   - Apollo client executes the GraphQL operation against the server
+   - Handles network communication and protocol details
+   - Applies any Apollo-specific settings (caching, retry logic, etc.)
+   - Returns a typed GraphQL result with data and/or errors
+
+6. **Response Processing**:
+   - GraphQLClient receives Apollo response
+   - Checks for GraphQL-specific errors
+   - Maps Apollo data to domain model using request's mapping function
+   - Creates a standardized Response object with:
+     - Mapped domain data
+     - Metadata (cache status, operation details, etc.)
+
+7. **Response Interceptor Processing**:
+   - Response interceptors are applied in sequence
+   - Common interceptors include:
+     - Error processing: Standardizing error formats
+     - Logging: Recording response details
+     - Analytics: Tracking API response patterns
+     - Validation: Ensuring response meets expected format
+
+8. **Return to Feature Kit**:
+   - Feature Kit receives the fully processed domain response
+   - Works directly with domain objects, completely isolated from GraphQL/Apollo details
 
 ### 4c. Converting Apollo Responses
 
