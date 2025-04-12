@@ -88,36 +88,59 @@ Key Components:
 
 **Architectural Approach:**
 
-We'll extend the existing networking infrastructure to support GraphQL operations:
+We'll extend the existing Repository/Service pattern to support GraphQL operations:
 
 ```
-┌─────────────────────┐     ┌─────────────────────┐
-│                     │     │                     │
-│  NetworkingProvider │     │ GraphQLRequest      │
-│                     │     │                     │
-└──────────┬──────────┘     └──────────┬──────────┘
-           │                           │
-           │                           │
-           │                           │
-┌──────────▼──────────────────────────▼──────────┐
-│                                                │
-│           GraphQLNetworkingProvider            │
-│                                                │
-└──────────────────────┬───────────────────────┬─┘
-                       │                       │
-          ┌────────────▼─────────┐  ┌─────────▼────────────┐
-          │                      │  │                      │
-          │    ApolloProvider    │  │   Error Converter    │
-          │                      │  │                      │
-          └──────────────────────┘  └──────────────────────┘
+┌─────────────────────┐     
+│                     │     
+│  Repository Protocol│     
+│  (+ GraphQL Method) │     
+└──────────┬──────────┘     
+           │                
+           │ implements    
+           │                
+┌──────────▼──────────────────────────────────────────┐
+│                                                     │
+│                   Service Class                     │
+│                                                     │
+│  ┌─────────────────┐       ┌─────────────────────┐  │
+│  │                 │       │                     │  │
+│  │   HTTPClient    │       │   GraphQLClient     │  │
+│  │  (For REST)     │       │  (For GraphQL)      │  │
+│  └─────────────────┘       └─────────────────────┘  │
+│                                       △             │
+│  ┌─────────────────────────────────────────────┐    │
+│  │                                             │    │
+│  │           Error Mapping Functions           │    │
+│  │         (Reused for both REST/GraphQL)      │    │
+│  └─────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────┘
+                              │
+                              │ conforms to
+                              ▼
+                  ┌─────────────────────┐
+                  │                     │
+                  │  ApolloClient      │
+                  │  (Implementation)   │
+                  │                     │
+                  └─────────────────────┘
 ```
 
 Key Components:
-1. Extension to the existing `NetworkingProvider` protocol to support GraphQL requests
-2. A concrete implementation (`GraphQLNetworkingProvider`) that:
-   - Encapsulates the Apollo client
-   - Handles the conversion of requests and responses
-   - Maps Apollo errors to our domain-specific errors
+1. Update the Repository protocol with a new method for GraphQL operations:
+   - Add a method to handle GraphQL requests
+   - Maintain compatibility with existing REST methods
+
+2. Extend the Service class implementation:
+   - Service currently has a private HTTPClient property for REST calls
+   - Add a new private GraphQLClient property to handle GraphQL operations
+   - Inject an ApolloClient instance as the GraphQLClient implementation
+   - Reuse existing error mapping functions for both REST and GraphQL errors
+
+3. Create a GraphQLClient protocol:
+   - Define a protocol that the ApolloClient will conform to
+   - Implement the protocol with Apollo-specific code
+   - This enables easy substitution of Apollo with alternative implementations
 
 ## 4. Handling GraphQL Requests and Responses
 
