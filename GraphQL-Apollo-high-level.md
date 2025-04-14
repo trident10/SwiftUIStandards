@@ -73,6 +73,185 @@ We'll use the adapter pattern to isolate Apollo-specific code and provide a clea
 │                               │                     │     │
 │                               └─────────────────────┘     │
 └───────────────────────────────────────────────────────────┘
+
+Flow:
+1. GraphQL queries defined in .graphql files
+2. Apollo generates Swift types for these operations
+3. Feature Kit implements GraphQLRequest protocol
+4. Request provides mapping from GraphQL data to domain models
+
+### 7c. Response Mapping Architecture
+
+**Data Flow:**
+
+```
+┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐
+│                   │     │                   │     │                   │
+│ Apollo Response   │────►│ Response Mapping  │────►│ Domain Response   │
+│                   │     │                   │     │                   │
+└───────────────────┘     └───────────────────┘     └───────────────────┘
+        │                         │                         │
+        │                         │                         │
+        ▼                         ▼                         ▼
+┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐
+│                   │     │                   │     │                   │
+│ GraphQL Errors    │────►│ Error Mapping     │────►│ Domain Errors     │
+│                   │     │                   │     │                   │
+└───────────────────┘     └───────────────────┘     └───────────────────┘
+```
+
+Key processes:
+1. Extract data from Apollo response
+2. Handle GraphQL-specific errors
+3. Map to domain models using request's mapping function
+4. Create standardized Response object with metadata
+5. Apply response interceptors
+
+## 8. Implementation Considerations for Domain-Specific Schema 
+
+### 8a. Schema Splitting Script Example
+
+To create domain-specific schema files, we can implement a script that:
+
+```javascript
+// schema-splitter.js
+const fs = require('fs');
+const { parse, print } = require('graphql');
+
+// Read the main schema
+const mainSchema = fs.readFileSync('./schema.graphql', 'utf8');
+const parsedSchema = parse(mainSchema);
+
+// Analyze type dependencies
+const typeDependencies = {};
+const domainTypes = {
+  user: [],
+  product: [],
+  shared: []
+};
+
+// Analyze the schema to determine domain ownership
+// This could be based on naming conventions, directives, or manual mapping
+parsedSchema.definitions.forEach(definition => {
+  const typeName = definition.name?.value;
+  
+  if (!typeName) return;
+  
+  // Determine domain based on naming prefix, directive, or mapping table
+  let domain = 'shared'; // Default domain
+  
+  if (typeName.startsWith('User') || typeName.match(/User|Auth|Permission/)) {
+    domain = 'user';
+  } else if (typeName.startsWith('Product') || typeName.match(/Product|Inventory|Catalog/)) {
+    domain = 'product';
+  }
+  
+  domainTypes[domain].push(definition);
+});
+
+// Generate domain-specific schemas
+Object.keys(domainTypes).forEach(domain => {
+  if (domain === 'shared') {
+    // Create shared schema
+    const sharedSchema = print({
+      kind: 'Document',
+      definitions: domainTypes.shared
+    });
+    fs.writeFileSync('./SharedKit/GraphQL/Schema/shared-schema.graphql', sharedSchema);
+  } else {
+    // Create domain-specific schema with imports of shared types
+    const domainSchema = print({
+      kind: 'Document',
+      definitions: domainTypes[domain]
+    });
+    
+    // Add import directive for shared types if the GraphQL implementation supports it
+    // or simply note the dependency
+    const schemaWithImports = `# This schema depends on shared-schema.graphql\n\n${domainSchema}`;
+    fs.writeFileSync(`./${domain.charAt(0).toUpperCase() + domain.slice(1)}Kit/GraphQL/Schema/${domain}-schema.graphql`, schemaWithImports);
+  }
+});
+
+console.log('Schema splitting complete!');
+```
+
+### 8b. Schema Dependencies Management
+
+To handle cross-domain type references:
+
+1. **Explicit Import Statements**:
+   ```graphql
+   # UserKit/GraphQL/Schema/user-schema.graphql
+   # import Role from "shared-schema.graphql"
+   
+   type User {
+     id: ID!
+     name: String!
+     role: Role! # Reference to a shared type
+   }
+   ```
+
+2. **Dependency Documentation**:
+   ```graphql
+   # ProductKit/GraphQL/Schema/product-schema.graphql
+   # Dependencies:
+   # - Currency (SharedKit)
+   # - Inventory (SharedKit)
+   
+   type Product {
+     id: ID!
+     price: Currency! # From shared schema
+     inventory: Inventory! # From shared schema
+   }
+   ```
+
+### 8c. Apollo Codegen Run Script
+
+A script to run codegen for all kits:
+
+```bash
+#!/bin/bash
+# run-apollo-codegen.sh
+
+# Run schema splitter first
+node scripts/schema-splitter.js
+
+# Run Apollo codegen for each kit
+echo "Generating code for UserKit..."
+apollo client:codegen --config=apollo-codegen-config/userkit-config.json
+
+echo "Generating code for ProductKit..."
+apollo client:codegen --config=apollo-codegen-config/productkit-config.json
+
+echo "Generating code for shared types..."
+apollo client:codegen --config=apollo-codegen-config/shared-config.json
+
+echo "Code generation complete!"
+```
+
+### 8d. Managing Schema Evolution
+
+For evolving the schema while maintaining domain boundaries:
+
+1. **Version Control**:
+   * Keep all schema files version controlled
+   * Establish review processes for schema changes
+   * Use pull requests to propose and review schema modifications
+
+2. **Schema Change Workflow**:
+   * Developer proposes schema change to main schema
+   * Run schema splitter script to update domain-specific schemas
+   * Run codegen to verify compatibility with current code
+   * Review impacts across Feature Kits
+
+3. **Breaking Change Management**:
+   * Use deprecation directives before removing fields
+   * Add versioning comments to track schema evolution
+   * Communicate schema changes to all Feature Kit owners
+
+---
+
+This architectural document provides a comprehensive approach to integrating Apollo iOS with the existing API Core Kit while maintaining the current architecture's integrity and introducing domain-specific schema organization. It outlines the key components, data flows, and design patterns for a modular, maintainable implementation that scales across multiple Feature Kits.
 ```
 
 Key Components:
@@ -339,38 +518,120 @@ The error handling system will:
 2. Map to corresponding API Core Kit error types
 3. Preserve relevant error details for debugging
 
-## 5. Apollo Script Usage
+## 5. Apollo Code Generation for Domain-Specific Feature Kits
 
-### 5a. Using Apollo Codegen
+### 5a. Schema Splitting Strategy
 
-**Code Generation Workflow:**
+Instead of using a centralized schema approach, we'll split our schema by domain to support modular code generation for each Feature Kit:
+
+**Schema Splitting Architecture:**
 
 ```
-┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐
-│                   │     │                   │     │                   │
-│  Schema Definition│     │  GraphQL          │     │  Apollo CLI       │
-│  (.graphql)       ├────►│  Operations       ├────►│  Code Generator   │
-│                   │     │  (.graphql)       │     │                   │
-└───────────────────┘     └───────────────────┘     └─────────┬─────────┘
-                                                              │
-                                                              │
-                                                              ▼
-                                                   ┌───────────────────┐
-                                                   │                   │
-                                                   │  Generated Swift  │
-                                                   │  Types            │
-                                                   │                   │
-                                                   └───────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│                  Schema Splitting Process                 │
+│                                                           │
+│  ┌─────────────────────┐                                  │
+│  │                     │                                  │
+│  │  Global Schema      │                                  │
+│  │  (schema.graphql)   │                                  │
+│  │                     │                                  │
+│  └──────────┬──────────┘                                  │
+│             │                                             │
+│             │ Schema Splitter Script                      │
+│             │                                             │
+│             ▼                                             │
+│  ┌──────────────────────────────────────────────────┐     │
+│  │                                                  │     │
+│  │               Domain Schema Files                │     │
+│  │                                                  │     │
+│  └──────────────────────────────────────────────────┘     │
+│                                                           │
+└───────────────────────────────────────────────────────────┘
+                          │
+                          │
+          ┌───────────────┼───────────────┐
+          │               │               │
+          ▼               ▼               ▼
+┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+│                 │ │                 │ │                 │
+│ UserKit Schema  │ │ ProductKit      │ │ Other Feature   │
+│                 │ │ Schema          │ │ Kit Schemas     │
+│                 │ │                 │ │                 │
+└─────────────────┘ └─────────────────┘ └─────────────────┘
 ```
 
-The code generation process will:
-1. Use a configuration file to define input/output settings
-2. Generate Swift types from GraphQL schema and operations
-3. Support Swift Package Manager for modular organization
+**Implementation Steps for Schema Splitting:**
 
-### 5b. Placement of Generated Files
+1. **Create a Schema Splitter Script**:
+   * Parse the full `schema.graphql`
+   * Extract User-related types into `UserKit/GraphQL/Schema/user-schema.graphql`
+   * Extract Product-related types into `ProductKit/GraphQL/Schema/product-schema.graphql`
+   * Ensure references between types are maintained
 
-**Project Structure:**
+2. **Handle Shared Types**:
+   * Identify types used across multiple domains (e.g., common enums, interfaces)
+   * Create a `SharedKit/GraphQL/Schema/shared-schema.graphql` for reused types
+   * Import shared types in Feature Kit-specific schema files
+
+3. **Schema Management Guidelines**:
+   * Use schema directives to mark domain ownership (e.g., `@domain(name: "user")`)
+   * Create documentations for type ownership and dependencies
+   * Establish governance process for schema changes that affect multiple domains
+
+### 5b. Kit-Specific Apollo Configurations
+
+Each Feature Kit will have its own Apollo configuration to generate domain-specific code:
+
+**Apollo Configuration Structure:**
+
+```
+ProjectRoot/
+├── apollo-codegen-config/
+│   ├── userkit-config.json         # User Kit specific config
+│   ├── productkit-config.json      # Product Kit specific config
+│   └── shared-config.json          # Configuration for shared types
+└── scripts/
+    └── run-apollo-codegen.sh       # Script to run codegen for all kits
+```
+
+**Example Configuration for UserKit:**
+
+```json
+{
+  "schemaNamespace": "UserGraphQL",
+  "input": {
+    "operationSearchPaths": ["UserKit/GraphQL/Operations/**/*.graphql"],
+    "schemaSearchPaths": [
+      "UserKit/GraphQL/Schema/user-schema.graphql",
+      "SharedKit/GraphQL/Schema/shared-schema.graphql"
+    ]
+  },
+  "output": {
+    "schemaTypes": {
+      "path": "./UserKit/GraphQL/Generated/Schema",
+      "moduleType": {
+        "swiftPackageManager": {
+          "name": "UserKitSchema"
+        }
+      }
+    },
+    "operations": {
+      "path": "./UserKit/GraphQL/Generated/Operations",
+      "moduleType": {
+        "swiftPackageManager": {
+          "name": "UserKitOperations"
+        }
+      }
+    }
+  }
+}
+```
+
+### 5c. Generated Code Structure
+
+With this approach, code generation will produce domain-specific types for each kit:
+
+**Project Structure with Domain-Specific Generated Code:**
 
 ```
 ProjectRoot/
@@ -388,206 +649,72 @@ ProjectRoot/
 │   ├── REST/
 │   │   ├── HTTPClient.swift              # Client for REST API calls
 │   │   └── RESTRequest.swift             # REST-specific request implementation
-│   ├── GraphQL/
-│   │   ├── Client/
-│   │   │   ├── GraphQLClient.swift       # Protocol defining GraphQL client interface
-│   │   │   └── ApolloClientWrapper.swift # Apollo implementation of GraphQLClient
-│   │   ├── Infrastructure/
-│   │   │   ├── ApolloProvider.swift      # Direct Apollo client wrapper
-│   │   │   └── GraphQLErrorMapper.swift  # Maps Apollo errors to API errors
-│   │   ├── Requests/
-│   │   │   └── GraphQLRequest.swift      # GraphQL request protocol
-│   │   └── GeneratedSchema/              # Apollo-generated schema types
-│   │       ├── SchemaMetadata.swift      # Generated schema information
-│   │       ├── Objects.swift             # Generated object types
-│   │       ├── InputObjects.swift        # Generated input object types
-│   │       ├── Enums.swift               # Generated enum types
-│   │       └── Interfaces.swift          # Generated interface types
-│   └── Services/
-│       └── Service.swift                 # Implements Repository with both clients
-├── FeatureKits/
-│   └── UserKit/                          # Example feature kit
-│       ├── Repository/
-│       │   └── UserRepository.swift      # Feature-specific repository interface
-│       ├── Service/
-│       │   └── UserService.swift         # Feature-specific service implementation
-│       ├── Models/
-│       │   └── User.swift                # Domain models
-│       └── GraphQL/
-│           ├── Operations/
-│           │   └── User.graphql          # GraphQL operation definitions
-│           ├── Generated/                # Feature-specific generated operation code
-│           │   └── UserOperations.swift  # Generated from User.graphql
-│           └── Requests/
-│               └── GetUserRequest.swift  # GraphQL request implementations
-└── schema.graphql                        # Main GraphQL schema
+│   └── GraphQL/
+│       ├── Client/
+│       │   ├── GraphQLClient.swift       # Protocol defining GraphQL client interface
+│       │   └── ApolloClientWrapper.swift # Apollo implementation of GraphQLClient
+│       └── Infrastructure/
+│           ├── ApolloProvider.swift      # Apollo client provider
+│           └── GraphQLErrorMapper.swift  # Maps Apollo errors to API errors
+├── SharedKit/
+│   └── GraphQL/
+│       ├── Schema/
+│       │   └── shared-schema.graphql     # Shared GraphQL types
+│       └── Generated/
+│           └── SharedTypes.swift         # Generated code for shared types
+├── UserKit/
+│   ├── Repository/
+│   │   └── UserRepository.swift          # User-specific repository interface
+│   ├── Service/
+│   │   └── UserService.swift             # User-specific service implementation
+│   ├── Models/
+│   │   └── User.swift                    # Domain models for users
+│   └── GraphQL/
+│       ├── Schema/
+│       │   └── user-schema.graphql       # User-specific schema types
+│       ├── Operations/
+│       │   └── User.graphql              # User GraphQL operations
+│       └── Generated/
+│           ├── Schema/                   # User-specific generated schema types
+│           │   ├── UserObjects.swift     # Generated User types
+│           │   └── UserEnums.swift       # Generated User enums
+│           └── Operations/               # User-specific generated operations
+│               └── UserOperations.swift  # Generated User queries/mutations
+├── ProductKit/
+│   ├── Repository/
+│   │   └── ProductRepository.swift       # Product-specific repository
+│   ├── Service/
+│   │   └── ProductService.swift          # Product-specific service
+│   ├── Models/
+│   │   └── Product.swift                 # Domain models for products
+│   └── GraphQL/
+│       ├── Schema/
+│       │   └── product-schema.graphql    # Product-specific schema
+│       ├── Operations/
+│       │   └── Product.graphql           # Product GraphQL operations
+│       └── Generated/
+│           ├── Schema/                   # Product-specific generated schema types
+│           │   ├── ProductObjects.swift  # Generated Product types
+│           │   └── ProductEnums.swift    # Generated Product enums
+│           └── Operations/               # Product-specific generated operations
+│               └── ProductOperations.swift # Generated Product queries/mutations
+└── scripts/
+    ├── schema-splitter.js                # Script to split schema by domain
+    └── run-apollo-codegen.sh             # Script to run code generation
 ```
 
-**Apollo Generated Files Explained:**
+### 5d. Using Domain-Specific Generated Code
 
-Apollo's code generation creates two types of Swift files:
-
-1. **Schema Type Definitions** (in APICoreKit):
-   - Generated from your main `schema.graphql` file
-   - Shared across all Feature Kits
-   - Placed in `APICoreKit/GraphQL/GeneratedSchema/`
-
-2. **Operation-Specific Files** (in Feature Kits):
-   - Generated from individual `.graphql` files in each Feature Kit
-   - Specific to that Feature Kit's queries/mutations
-   - Placed in each Feature Kit's `GraphQL/Generated/` directory
-
-**Example: Schema Type Definitions**
-
-For this GraphQL schema snippet:
-
-```graphql
-# schema.graphql
-type User {
-  id: ID!
-  name: String!
-  email: String!
-  role: UserRole!
-}
-
-enum UserRole {
-  ADMIN
-  EDITOR
-  VIEWER
-}
-
-input UserInput {
-  name: String!
-  email: String!
-  role: UserRole!
-}
-```
-
-Apollo would generate these types in `APICoreKit/GraphQL/GeneratedSchema/`:
-
-```swift
-// Objects.swift
-public struct User: GraphQLObject {
-  public static let typename = "User"
-  public static let possibleTypes = ["User"]
-  
-  public var id: GraphQLID { __data["id"] }
-  public var name: String { __data["name"] }
-  public var email: String { __data["email"] }
-  public var role: UserRole { __data["role"] }
-  
-  // Internal implementation details...
-}
-
-// Enums.swift
-public enum UserRole: String, GraphQLEnum {
-  case admin = "ADMIN"
-  case editor = "EDITOR"
-  case viewer = "VIEWER"
-}
-
-// InputObjects.swift
-public struct UserInput: GraphQLInputObject {
-  public var name: String
-  public var email: String
-  public var role: UserRole
-  
-  public init(name: String, email: String, role: UserRole) {
-    self.name = name
-    self.email = email
-    self.role = role
-  }
-  
-  // Internal conversion methods...
-}
-```
-
-**Example: Operation-Specific Generated Code**
-
-For a GraphQL operation in a Feature Kit:
-
-```graphql
-# UserKit/GraphQL/Operations/User.graphql
-query GetUser($id: ID!) {
-  user(id: $id) {
-    id
-    name
-    email
-    role
-  }
-}
-
-mutation CreateUser($input: UserInput!) {
-  createUser(input: $input) {
-    id
-    name
-    email
-  }
-}
-```
-
-Apollo would generate this code in `UserKit/GraphQL/Generated/UserOperations.swift`:
-
-```swift
-// UserOperations.swift
-public final class GetUserQuery: GraphQLQuery {
-  public static let operationName: String = "GetUser"
-  public static let document: DocumentType = .notPersisted(
-    definition: "query GetUser($id: ID!) { user(id: $id) { id name email role } }"
-  )
-  
-  public var id: GraphQLID
-  
-  public init(id: GraphQLID) {
-    self.id = id
-  }
-  
-  public var variables: GraphQLMap? {
-    return ["id": id]
-  }
-  
-  public struct Data: GraphQLSelectionSet {
-    public var user: User?
-    
-    // Selection set implementation...
-  }
-}
-
-public final class CreateUserMutation: GraphQLMutation {
-  public static let operationName: String = "CreateUser"
-  public static let document: DocumentType = .notPersisted(
-    definition: "mutation CreateUser($input: UserInput!) { createUser(input: $input) { id name email } }"
-  )
-  
-  public var input: UserInput
-  
-  public init(input: UserInput) {
-    self.input = input
-  }
-  
-  public var variables: GraphQLMap? {
-    return ["input": input]
-  }
-  
-  public struct Data: GraphQLSelectionSet {
-    public var createUser: User
-    
-    // Selection set implementation...
-  }
-}
-```
-
-**Using Generated Code in Feature Kit Requests:**
+**Example: Implementing a GraphQL Request in UserKit:**
 
 ```swift
 // UserKit/GraphQL/Requests/GetUserRequest.swift
 import APICoreKit
-// This import gives access to the schema types and the repository pattern
-import UserKitGenerated 
-// This import gives access to the operation-specific generated code
+import UserKitSchema      // Domain-specific schema imports
+import UserKitOperations  // Domain-specific operation imports
 
 public struct GetUserRequest: GraphQLRequest {
-    public typealias Operation = GetUserQuery
+    public typealias Operation = UserKitOperations.GetUserQuery
     public typealias ResponseData = UserDomainModel
     
     private let userId: String
@@ -613,7 +740,7 @@ public struct GetUserRequest: GraphQLRequest {
         )
     }
     
-    private func mapRole(_ graphQLRole: UserRole) -> UserDomainModel.Role {
+    private func mapRole(_ graphQLRole: UserKitSchema.UserRole) -> UserDomainModel.Role {
         switch graphQLRole {
         case .admin: return .administrator
         case .editor: return .contentEditor
@@ -623,34 +750,27 @@ public struct GetUserRequest: GraphQLRequest {
 }
 ```
 
-This approach provides a clean separation between:
-1. **Schema Types**: Shared, reusable types based on your GraphQL schema (in APICoreKit)
-2. **Operation Code**: Feature-specific query/mutation classes (in each Feature Kit)
-3. **Request Implementations**: Your custom code that connects Apollo operations to your domain models
+**Benefits of Domain-Specific Code Generation:**
 
-To configure Apollo codegen for this structure, use:
+1. **Modularity**:
+   - Each Feature Kit contains only the schema types and operations it needs
+   - Clearer ownership of GraphQL types and operations
+   - Reduced coupling between different domain areas
 
-```json
-{
-  "schemaNamespace": "GraphQLAPI",
-  "input": {
-    "operationSearchPaths": ["**/*.graphql"],
-    "schemaSearchPaths": ["schema.graphql"]
-  },
-  "output": {
-    "schemaTypes": {
-      "path": "./APICoreKit/GraphQL/GeneratedSchema",
-      "moduleType": {
-        "swiftPackageManager": {}
-      }
-    },
-    "operations": {
-      "relative": true,
-      "relativeOutputPath": "./Generated"
-    }
-  }
-}
-```
+2. **Build Performance**:
+   - Smaller, focused code generation steps
+   - Parallel code generation for different Feature Kits
+   - Changes to one domain don't trigger regeneration for all kits
+
+3. **Team Collaboration**:
+   - Domain teams can own their schema portions
+   - Reduced merge conflicts when multiple teams modify the schema
+   - Clear boundaries for API responsibilities
+
+4. **Scalability**:
+   - Easier to scale as the schema grows
+   - New Feature Kits can be added without affecting existing ones
+   - Better control over generated code size in each module
 
 ## 6. Future-proofing Considerations
 
@@ -827,41 +947,3 @@ Key components:
 │  │                                                     │  │
 │  └─────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────┘
-```
-
-Flow:
-1. GraphQL queries defined in .graphql files
-2. Apollo generates Swift types for these operations
-3. Feature Kit implements GraphQLRequest protocol
-4. Request provides mapping from GraphQL data to domain models
-
-### 7c. Response Mapping Architecture
-
-**Data Flow:**
-
-```
-┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐
-│                   │     │                   │     │                   │
-│ Apollo Response   │────►│ Response Mapping  │────►│ Domain Response   │
-│                   │     │                   │     │                   │
-└───────────────────┘     └───────────────────┘     └───────────────────┘
-        │                         │                         │
-        │                         │                         │
-        ▼                         ▼                         ▼
-┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐
-│                   │     │                   │     │                   │
-│ GraphQL Errors    │────►│ Error Mapping     │────►│ Domain Errors     │
-│                   │     │                   │     │                   │
-└───────────────────┘     └───────────────────┘     └───────────────────┘
-```
-
-Key processes:
-1. Extract data from Apollo response
-2. Handle GraphQL-specific errors
-3. Map to domain models using request's mapping function
-4. Create standardized Response object with metadata
-5. Apply response interceptors
-
----
-
-This architectural document provides a high-level approach to integrating Apollo iOS with the existing API Core Kit while maintaining the current architecture's integrity. It outlines the key components, data flows, and design patterns without getting into implementation details. Once this architecture is finalized, we can proceed with actual code implementation.
