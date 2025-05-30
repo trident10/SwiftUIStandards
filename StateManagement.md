@@ -327,8 +327,6 @@ class ProductListViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var isEmpty = false
-    @Published var isRefreshing = false
-    @Published var hasMorePages = true
     
     func loadProducts() {
         isLoading = true
@@ -354,7 +352,7 @@ struct ProductListView: View {
     
     var body: some View {
         Group {
-            if viewModel.isLoading && viewModel.products.isEmpty {
+            if viewModel.isLoading {
                 ProgressView()
             } else if let error = viewModel.errorMessage {
                 ErrorView(message: error)
@@ -374,46 +372,24 @@ struct ProductListView: View {
 ```swift
 class ProductListViewModel: ObservableObject {
     // Single source of truth for view state
-    @Published private(set) var viewState: ViewState = .idle
+    @Published private(set) var viewState: ViewState = .loading
     
     enum ViewState {
-        case idle
         case loading
         case loaded(products: [Product])
-        case empty
         case error(Error)
-        case refreshing(currentProducts: [Product])
-        case paginating(currentProducts: [Product])
     }
     
-    // Computed properties for convenience
+    // Computed property for easy access
     var products: [Product] {
-        switch viewState {
-        case .loaded(let products), 
-             .refreshing(let products),
-             .paginating(let products):
+        if case .loaded(let products) = viewState {
             return products
-        default:
-            return []
         }
+        return []
     }
     
     func loadProducts() {
         viewState = .loading
-        
-        Task {
-            do {
-                let fetchedProducts = try await API.fetchProducts()
-                viewState = fetchedProducts.isEmpty ? .empty : .loaded(products: fetchedProducts)
-            } catch {
-                viewState = .error(error)
-            }
-        }
-    }
-    
-    func refresh() {
-        guard case .loaded(let currentProducts) = viewState else { return }
-        viewState = .refreshing(currentProducts: currentProducts)
         
         Task {
             do {
@@ -426,114 +402,58 @@ class ProductListViewModel: ObservableObject {
     }
 }
 
-// Clean view with pattern matching
+// Clean view with declarative modifiers
 struct ProductListView: View {
     @StateObject private var viewModel = ProductListViewModel()
     
     var body: some View {
-        Group {
-            switch viewModel.viewState {
-            case .idle:
-                Color.clear
-                    .onAppear { viewModel.loadProducts() }
-                
-            case .loading:
+        List(viewModel.products) { product in
+            ProductRow(product: product)
+        }
+        .overlay {
+            if viewModel.products.isEmpty, case .loaded = viewModel.viewState {
+                EmptyStateView()
+            }
+        }
+        .onAppear {
+            viewModel.loadProducts()
+        }
+        .loading(viewModel.viewState)
+        .error(viewModel.viewState) {
+            viewModel.loadProducts()
+        }
+    }
+}
+
+// Reusable ViewState modifiers
+extension View {
+    func loading(_ state: ProductListViewModel.ViewState) -> some View {
+        overlay {
+            if case .loading = state {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                
-            case .loaded(let products):
-                List(products) { product in
-                    ProductRow(product: product)
-                }
-                .refreshable {
-                    await viewModel.refresh()
-                }
-                
-            case .empty:
-                EmptyStateView()
-                
-            case .error(let error):
-                ErrorView(error: error) {
-                    viewModel.loadProducts()
-                }
-                
-            case .refreshing(let products):
-                List(products) { product in
-                    ProductRow(product: product)
-                }
-                .overlay(alignment: .top) {
-                    ProgressView()
-                        .padding()
-                }
-                
-            case .paginating(let products):
-                List {
-                    ForEach(products) { product in
-                        ProductRow(product: product)
-                    }
-                    ProgressView()
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                }
+                    .background(Color(.systemBackground))
+            }
+        }
+    }
+    
+    func error(_ state: ProductListViewModel.ViewState, onRetry: @escaping () -> Void) -> some View {
+        overlay {
+            if case .error(let error) = state {
+                ErrorView(error: error, onRetry: onRetry)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.systemBackground))
             }
         }
     }
 }
 
-// Another example: Form validation with ViewState
-class LoginViewModel: ObservableObject {
-    @Published private(set) var viewState: ViewState = .idle
-    @Published var email = ""
-    @Published var password = ""
-    
-    enum ViewState {
-        case idle
-        case validating
-        case invalid(errors: [ValidationError])
-        case submitting
-        case success(user: User)
-        case failure(Error)
-    }
-    
-    enum ValidationError {
-        case invalidEmail
-        case passwordTooShort
-        case emptyFields
-    }
-    
-    func validate() {
-        var errors: [ValidationError] = []
-        
-        if email.isEmpty || password.isEmpty {
-            errors.append(.emptyFields)
-        }
-        if !email.contains("@") {
-            errors.append(.invalidEmail)
-        }
-        if password.count < 8 {
-            errors.append(.passwordTooShort)
-        }
-        
-        viewState = errors.isEmpty ? .validating : .invalid(errors: errors)
-    }
-    
-    func login() {
-        validate()
-        
-        guard case .validating = viewState else { return }
-        
-        viewState = .submitting
-        
-        Task {
-            do {
-                let user = try await AuthService.login(email: email, password: password)
-                viewState = .success(user: user)
-            } catch {
-                viewState = .failure(error)
-            }
-        }
-    }
-}
+// Benefits of ViewState Enum Pattern:
+// 1. Single source of truth - no conflicting states
+// 2. Impossible states prevented - can't be loading AND showing error
+// 3. Cleaner view code with declarative modifiers
+// 4. Easier testing - mock single viewState instead of multiple properties
+// 5. Type-safe state transitions
 ```
 
 ## Things to Avoid
