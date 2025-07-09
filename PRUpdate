@@ -1,0 +1,57 @@
+# Add Payment Details Queries Integration - Part 1
+
+## Summary
+This PR introduces the first GraphQL query integration for payment details functionality, specifically adding the ability to retrieve saved payee information with associated user accounts.
+
+## Changes Made
+
+### 🔧 GraphQL Integration
+- **Added new GraphQL query**: `GetPayeeWithUserAccounts.graphql`
+  - Retrieves saved payee details including payeeId, nickname, and account information
+  - Includes PayeeAccount details (accountType, bsb, accountName, accountNumber)
+  - Returns associated user accounts with comprehensive account data
+
+### 📱 Swift Models & Response Types
+- **Created `SavedPayeeWithUserAccountsResponse.swift`**:
+  - `SavedPayeeWithUserAccountsResponse` struct with Equatable conformance
+  - `SavedPayeeDetails` model containing payee information
+  - `AsPayeeAccount` model for account-specific data
+  - `Account` model with full account details (accountId, accountType, nickname, balance, bsb, accountNumber)
+  - Proper PayeeAccountType enum handling (ACCOUNT, PAYID, CARD, unknown)
+
+### 🎮 Controller Updates
+- **Enhanced `PaymentDetailsController.swift`**:
+  - Added GraphQL repository integration
+  - Implemented `getSavedPayeeWithUserAccounts(payeeID:)` method
+  - Proper error handling with switch cases for success/failure scenarios
+  - Apollo GraphQL query execution with result mapping
+
+### 🧪 Testing Infrastructure
+- **Added comprehensive unit tests**:
+  - `PaymentDetailsControllerTests.swift` with mock repository setup
+  - Test coverage for the new GraphQL query functionality
+  - Mock GraphQL repository implementation
+
+### ⚙️ Configuration
+- **Updated Apollo CodeGen configuration**:
+  - Added new operation search paths for payment details queries
+  - Updated schema search paths to include the new GraphQL operations
+
+## Technical Details
+- **Query Name**: `GetPayeeWithUserAccounts`
+- **Operation Type**: Query
+- **Response Mapping**: Full Apollo-generated response types with proper Swift model mapping
+- **Error Handling**: Comprehensive error handling for GraphQL and unexpected response types
+
+## Next Steps
+This is the first part of the payment details queries integration. Future PRs will likely include:
+- Additional payment-related queries
+- Enhanced error handling
+- UI integration for the new data models
+
+## Testing
+- Unit tests included for new controller methods
+- Mock implementations provided for testing GraphQL integration
+
+---
+**Related Ticket**: US2481212 - Add Payment Details Queries
