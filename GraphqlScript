@@ -1,0 +1,322 @@
+#!/usr/bin/env swift
+
+import Foundation
+
+/**
+ * GraphQL Code Generation Script for Apollo iOS
+ *
+ * This Swift script automates the generation of GraphQL code using Apollo iOS CLI.
+ * It handles path resolution, error checking, and provides user feedback.
+ *
+ * Prerequisites:
+ * - Node.js installed
+ * - Apollo iOS CLI installed (npm install -g @apollo/rover or locally)
+ * - Valid GraphQL configuration file
+ *
+ * Usage:
+ *   swift generate_graphql.swift [--verbose|--quiet|--help]
+ *   chmod +x generate_graphql.swift && ./generate_graphql.swift
+ */
+
+// MARK: - Configuration
+
+struct Config {
+    static let scriptURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    static let baseDirectory = scriptURL.deletingLastPathComponent()
+    static let configPath = baseDirectory
+        .appendingPathComponent("..")
+        .appendingPathComponent("GraphQLCodeGen")
+        .appendingPathComponent("apollo-codegen-config.json")
+        .standardized
+}
+
+// MARK: - Command Line Options
+
+enum LogLevel {
+    case quiet, normal, verbose
+}
+
+struct Options {
+    var logLevel: LogLevel = .normal
+    var showHelp: Bool = false
+    
+    init(arguments: [String]) {
+        for arg in arguments.dropFirst() {
+            switch arg {
+            case "--verbose", "-v":
+                logLevel = .verbose
+            case "--quiet", "-q":
+                logLevel = .quiet
+            case "--help", "-h":
+                showHelp = true
+            default:
+                print("❌ Unknown option: \(arg)")
+                showHelp = true
+            }
+        }
+    }
+}
+
+// MARK: - Logging
+
+struct Logger {
+    let level: LogLevel
+    
+    func info(_ message: String) {
+        guard level != .quiet else { return }
+        print(message)
+    }
+    
+    func verbose(_ message: String) {
+        guard level == .verbose else { return }
+        print("🔍 \(message)")
+    }
+    
+    func success(_ message: String) {
+        guard level != .quiet else { return }
+        print("✅ \(message)")
+    }
+    
+    func error(_ message: String) {
+        fputs("❌ \(message)\n", stderr)
+    }
+    
+    func warning(_ message: String) {
+        guard level != .quiet else { return }
+        print("⚠️ \(message)")
+    }
+}
+
+// MARK: - Apollo CLI Management
+
+struct ApolloCLI {
+    enum CLIError: Error, LocalizedDescription {
+        case notFound
+        case executionFailed(Int32)
+        case configNotFound(String)
+        
+        var errorDescription: String? {
+            switch self {
+            case .notFound:
+                return "Apollo iOS CLI not found"
+            case .executionFailed(let code):
+                return "Apollo CLI execution failed with exit code: \(code)"
+            case .configNotFound(let path):
+                return "Configuration file not found: \(path)"
+            }
+        }
+    }
+    
+    private let logger: Logger
+    
+    init(logger: Logger) {
+        self.logger = logger
+    }
+    
+    func findExecutable() -> String? {
+        logger.verbose("Searching for Apollo iOS CLI...")
+        
+        // 1. Check if apollo-ios-cli is in PATH
+        if let pathResult = executeCommand("/usr/bin/which", arguments: ["apollo-ios-cli"]),
+           pathResult.exitCode == 0 {
+            let executable = pathResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            logger.verbose("Found apollo-ios-cli in PATH: \(executable)")
+            return "apollo-ios-cli"
+        }
+        
+        // 2. Try local node_modules
+        let localPath = Config.baseDirectory
+            .appendingPathComponent("..")
+            .appendingPathComponent("node_modules")
+            .appendingPathComponent(".bin")
+            .appendingPathComponent("apollo-ios-cli")
+            .standardized
+        
+        if FileManager.default.isExecutableFile(atPath: localPath.path) {
+            logger.verbose("Found apollo-ios-cli in local node_modules: \(localPath.path)")
+            return localPath.path
+        }
+        
+        // 3. Try npx fallback
+        if executeCommand("/usr/bin/which", arguments: ["npx"])?.exitCode == 0 {
+            if let npxResult = executeCommand("/usr/bin/npx", arguments: ["--quiet", "apollo-ios-cli", "--version"]),
+               npxResult.exitCode == 0 {
+                logger.verbose("Found apollo-ios-cli via npx")
+                return "npx apollo-ios-cli"
+            }
+        }
+        
+        return nil
+    }
+    
+    func validatePrerequisites() throws -> String {
+        logger.verbose("Validating prerequisites...")
+        
+        // Check configuration file
+        guard FileManager.default.fileExists(atPath: Config.configPath.path) else {
+            throw CLIError.configNotFound(Config.configPath.path)
+        }
+        
+        logger.verbose("Configuration file found: \(Config.configPath.path)")
+        
+        // Find Apollo CLI
+        guard let executable = findExecutable() else {
+            logger.error("Apollo iOS CLI not found!")
+            logger.error("")
+            logger.error("Please install it using one of these methods:")
+            logger.error("  1. Global: npm install -g @apollo/rover")
+            logger.error("  2. Local:  npm install @apollo/rover")
+            logger.error("  3. Via npx: Ensure @apollo/rover is available")
+            throw CLIError.notFound
+        }
+        
+        return executable
+    }
+    
+    func generateCode(using executable: String) throws {
+        logger.info("🚀 Starting GraphQL code generation...")
+        logger.verbose("Using Apollo CLI: \(executable)")
+        logger.verbose("Config path: \(Config.configPath.path)")
+        
+        var arguments = ["generate", "--path", Config.configPath.path]
+        
+        if logger.level == .verbose {
+            arguments.append("--verbose")
+        }
+        
+        let components = executable.components(separatedBy: " ")
+        let command = components.first!
+        let commandArgs = Array(components.dropFirst()) + arguments
+        
+        guard let result = executeCommand(command, arguments: commandArgs) else {
+            throw CLIError.executionFailed(-1)
+        }
+        
+        if result.exitCode == 0 {
+            logger.success("All GraphQL files generated successfully!")
+        } else {
+            logger.error("GraphQL generation failed with exit code: \(result.exitCode)")
+            logger.error("Output: \(result.output)")
+            if !result.errorOutput.isEmpty {
+                logger.error("Error: \(result.errorOutput)")
+            }
+            throw CLIError.executionFailed(result.exitCode)
+        }
+    }
+}
+
+// MARK: - Process Execution
+
+struct ProcessResult {
+    let exitCode: Int32
+    let output: String
+    let errorOutput: String
+}
+
+func executeCommand(_ command: String, arguments: [String] = []) -> ProcessResult? {
+    let process = Process()
+    let outputPipe = Pipe()
+    let errorPipe = Pipe()
+    
+    process.executableURL = URL(fileURLWithPath: command)
+    process.arguments = arguments
+    process.standardOutput = outputPipe
+    process.standardError = errorPipe
+    
+    do {
+        try process.run()
+        process.waitUntilExit()
+        
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        
+        let output = String(data: outputData, encoding: .utf8) ?? ""
+        let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
+        
+        return ProcessResult(
+            exitCode: process.terminationStatus,
+            output: output,
+            errorOutput: errorOutput
+        )
+    } catch {
+        return nil
+    }
+}
+
+// MARK: - Help System
+
+func showHelp() {
+    print("""
+    GraphQL Code Generation Script (Swift)
+    
+    Usage: swift generate_graphql.swift [OPTIONS]
+           ./generate_graphql.swift [OPTIONS]  (if executable)
+    
+    OPTIONS:
+        --verbose, -v    Enable verbose output
+        --quiet, -q      Suppress all output except errors
+        --help, -h       Show this help message
+    
+    DESCRIPTION:
+        Generates GraphQL code using Apollo iOS CLI. The script will:
+        1. Look for apollo-ios-cli in PATH
+        2. Fall back to local node_modules if not found globally
+        3. Validate configuration file exists
+        4. Run code generation with proper error handling
+    
+    CONFIGURATION:
+        Config file: \(Config.configPath.path)
+    
+    EXAMPLES:
+        swift generate_graphql.swift
+        swift generate_graphql.swift --verbose
+        ./generate_graphql.swift --quiet
+    """)
+}
+
+// MARK: - Main Execution
+
+func main() {
+    let options = Options(arguments: CommandLine.arguments)
+    
+    if options.showHelp {
+        showHelp()
+        exit(0)
+    }
+    
+    let logger = Logger(level: options.logLevel)
+    let apolloCLI = ApolloCLI(logger: logger)
+    
+    logger.info("🔧 GraphQL Code Generation Script (Swift)")
+    logger.info("==========================================")
+    
+    do {
+        // Validate prerequisites and get Apollo CLI executable
+        let executable = try apolloCLI.validatePrerequisites()
+        
+        // Generate GraphQL code
+        try apolloCLI.generateCode(using: executable)
+        
+        logger.info("")
+        logger.success("Code generation completed successfully! 🎉")
+        exit(0)
+        
+    } catch let error as ApolloCLI.CLIError {
+        logger.info("")
+        logger.error("Error: \(error.localizedDescription)")
+        
+        if case .configNotFound(_) = error {
+            logger.error("Please ensure the apollo-codegen-config.json file exists.")
+        }
+        
+        exit(1)
+        
+    } catch {
+        logger.info("")
+        logger.error("Unexpected error: \(error.localizedDescription)")
+        exit(1)
+    }
+}
+
+// Execute main function
+main()
