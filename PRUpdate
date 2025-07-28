@@ -1,57 +1,69 @@
-# Add Payment Details Queries Integration - Part 1
+### ✅ Refactor + Inject Payment Details & Review Coordinators with Provider Support
 
-## Summary
-This PR introduces the first GraphQL query integration for payment details functionality, specifically adding the ability to retrieve saved payee information with associated user accounts.
+#### 🧩 Overview
 
-## Changes Made
-
-### 🔧 GraphQL Integration
-- **Added new GraphQL query**: `GetPayeeWithUserAccounts.graphql`
-  - Retrieves saved payee details including payeeId, nickname, and account information
-  - Includes PayeeAccount details (accountType, bsb, accountName, accountNumber)
-  - Returns associated user accounts with comprehensive account data
-
-### 📱 Swift Models & Response Types
-- **Created `SavedPayeeWithUserAccountsResponse.swift`**:
-  - `SavedPayeeWithUserAccountsResponse` struct with Equatable conformance
-  - `SavedPayeeDetails` model containing payee information
-  - `AsPayeeAccount` model for account-specific data
-  - `Account` model with full account details (accountId, accountType, nickname, balance, bsb, accountNumber)
-  - Proper PayeeAccountType enum handling (ACCOUNT, PAYID, CARD, unknown)
-
-### 🎮 Controller Updates
-- **Enhanced `PaymentDetailsController.swift`**:
-  - Added GraphQL repository integration
-  - Implemented `getSavedPayeeWithUserAccounts(payeeID:)` method
-  - Proper error handling with switch cases for success/failure scenarios
-  - Apollo GraphQL query execution with result mapping
-
-### 🧪 Testing Infrastructure
-- **Added comprehensive unit tests**:
-  - `PaymentDetailsControllerTests.swift` with mock repository setup
-  - Test coverage for the new GraphQL query functionality
-  - Mock GraphQL repository implementation
-
-### ⚙️ Configuration
-- **Updated Apollo CodeGen configuration**:
-  - Added new operation search paths for payment details queries
-  - Updated schema search paths to include the new GraphQL operations
-
-## Technical Details
-- **Query Name**: `GetPayeeWithUserAccounts`
-- **Operation Type**: Query
-- **Response Mapping**: Full Apollo-generated response types with proper Swift model mapping
-- **Error Handling**: Comprehensive error handling for GraphQL and unexpected response types
-
-## Next Steps
-This is the first part of the payment details queries integration. Future PRs will likely include:
-- Additional payment-related queries
-- Enhanced error handling
-- UI integration for the new data models
-
-## Testing
-- Unit tests included for new controller methods
-- Mock implementations provided for testing GraphQL integration
+This PR refactors the `PayAnyonePaymentDetailsCoordinator` and `PayAnyonePaymentReviewCoordinator` setup to support dependency injection using providers. This enables comprehensive unit testing and future-proofs the codebase with modular, protocol-driven architecture.
 
 ---
-**Related Ticket**: US2481212 - Add Payment Details Queries
+
+#### 🧱 Key Additions
+
+##### 🔧 Coordinator Injection Enhancements
+
+* Introduced:
+
+  * `PayAnyonePaymentDetailsHostingControllerProviding`
+  * `PayAnyonePaymentReviewCoordinatorProviding`
+* Added `make()` methods to create instances cleanly and support mocks.
+
+##### 🧪 Mock & Testing Support
+
+* Added `MockPayAnyonePaymentReviewCoordinator` with:
+
+  * `startInputModel`
+  * `showPaymentReceipt` call tracking
+  * Fraud session check simulation
+* Updated:
+
+  * `MockPayAnyonePaymentDetailsCoordinator` to track calls to `showPaymentReview`
+  * `FixedDateProvider` to simulate time-sensitive logic deterministically
+* Stubs added for:
+
+  * `PayAnyonePaymentDetailsData.Output`
+  * `PayAnyonePaymentReviewInputModel`
+
+##### ✂️ Removed
+
+* Redundant test code that directly initialized concrete coordinators inside `PayAnyonePaymentReviewViewModelTests`
+* Inlined test-specific coordinators were moved to dedicated mocks or testable classes
+
+---
+
+#### 📄 Files Modified or Added
+
+* ✅ Providers:
+
+  * `PayAnyonePaymentDetailsHostingControllerProvider.swift`
+  * `PayAnyonePaymentReviewCoordinatorProvider.swift`
+* ✅ Mocks:
+
+  * `MockPayAnyonePaymentReviewCoordinator.swift`
+  * `MockHostingViewControllerProvider.swift`
+* ✅ Stubs:
+
+  * `.stub` for `Output`, `.mock` for `InputModel`
+  * `FixedDateProvider` for consistent date injection in tests
+* ✅ Tests:
+
+  * Updated `PayAnyonePaymentDetailsCoordinatorTests`
+  * Updated `PayAnyonePaymentDetailsViewModelTests`
+  * Updated `PayAnyonePaymentReviewViewModelTests`
+
+---
+
+#### 🎯 Impact
+
+* 🧪 Enables testing coordinator behavior in isolation
+* ♻️ Reduces tight coupling and enhances extensibility
+* 🔍 Makes fraud session tracking logic testable
+* 🧼 Replaces hardcoded or untestable initializations with clean DI patterns
