@@ -1,0 +1,26 @@
+Apollo Client for iOS provides several powerful caching features that help optimize GraphQL operations and improve app performance:
+In-Memory Cache
+Apollo's default normalized cache stores query results in memory using a key-value structure. Each GraphQL object is cached by its id (or _id) field, allowing efficient updates when the same object appears in different queries. This prevents data duplication and keeps your cache consistent.
+Cache Policies
+You can control caching behavior with different fetch policies:
+
+cache-first (default): Returns cached data if available, otherwise fetches from network
+cache-and-network: Returns cached data immediately, then fetches fresh data from network
+network-only: Always fetches from network, ignoring cache
+cache-only: Only returns cached data, never hits the network
+no-cache: Fetches from network but doesn't store the result
+
+Automatic Cache Updates
+When you perform mutations, Apollo automatically updates the cache if the mutation returns objects that are already cached. This happens through the normalized cache structure - if a mutation returns a User object with an ID that's already cached, those fields get updated everywhere that user appears.
+Manual Cache Updates
+For more complex scenarios, you can manually update the cache using:
+
+update functions in mutations to modify the cache after successful operations
+writeQuery and writeFragment to directly write data to the cache
+readQuery and readFragment to read specific data from the cache
+
+SQLite Cache (Persistent Storage)
+Apollo iOS supports an optional SQLite-based cache that persists data between app launches. This is particularly useful for offline functionality and faster app startup times. You configure this by providing a SQLiteNormalizedCache instead of the default in-memory cache.
+Cache Key Customization
+You can customize how objects are identified in the cache by providing custom cache key resolution logic, which is helpful when your GraphQL schema doesn't use standard id fields.
+These caching features work together to minimize network requests, provide instant UI updates, and enable offline functionality in your iOS apps. The normalized cache structure is particularly powerful because it automatically keeps your UI consistent when the same data appears in multiple places.
