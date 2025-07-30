@@ -24,3 +24,33 @@ Apollo iOS supports an optional SQLite-based cache that persists data between ap
 Cache Key Customization
 You can customize how objects are identified in the cache by providing custom cache key resolution logic, which is helpful when your GraphQL schema doesn't use standard id fields.
 These caching features work together to minimize network requests, provide instant UI updates, and enable offline functionality in your iOS apps. The normalized cache structure is particularly powerful because it automatically keeps your UI consistent when the same data appears in multiple places.
+
+Cache Policies Explained
+
+Cache-First (returnCacheDataElseFetch)
+
+When to use: Default behavior for most queries where you want fast UI updates
+How it works: Checks cache first, only hits network if no cached data exists
+Benefits: Fastest initial load, reduces network usage
+Drawbacks: May show stale data
+
+Cache-and-Network (returnCacheDataAndFetch)
+
+When to use: Best user experience - instant cache data, then fresh data
+How it works: Returns cached data immediately, then fetches from network
+Benefits: Instant UI + fresh data, best UX
+Drawbacks: Two potential UI updates, more network usage
+
+Network-Only (fetchIgnoringCacheData)
+
+When to use: Pull-to-refresh, when you need guaranteed fresh data
+How it works: Always hits network, ignores cache
+Benefits: Always fresh data
+Drawbacks: Slower, requires network connection
+
+Cache-Only (returnCacheDataDontFetch)
+
+When to use: Offline mode, when you only want cached data
+How it works: Only reads from cache, never hits network
+Benefits: Works offline, instant response
+Drawbacks: May return no data if nothing cached
