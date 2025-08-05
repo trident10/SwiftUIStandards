@@ -1,139 +1,510 @@
-# Apollo iOS Caching Integration and Configuration
+# Apollo iOS Caching Mechanism - Technical Document
 
-## Overview
+## 1. Overview
 
-Apollo iOS provides powerful client-side caching through a normalized cache mechanism. Normalized caching stores GraphQL query responses at the object level, improving data consistency, reducing network traffic, and significantly enhancing app performance and responsiveness.
+This document outlines the implementation strategy for adopting Apollo iOS caching mechanism in our GraphQL-based iOS application. The caching layer will improve app performance, reduce network calls, and provide better offline support while maintaining data consistency.
 
-We utilize the **ApolloSQLiteNormalizedCache** to persist cached data across application launches, providing offline support and faster data retrieval.
+## 2. Architecture Overview
 
-## Prerequisites
+### 2.1 Cache Type Selection
+- **Decision**: In-Memory Cache (InMemoryNormalizedCache)
+- **Rationale**: 
+  - Faster read/write operations compared to SQLite
+  - Suitable for session-based data that doesn't require persistence
+  - Simpler implementation and maintenance
+  - Memory footprint acceptable for our use case
 
-Ensure your project meets the following prerequisites:
+### 2.2 Cache Architecture Layers
 
-* Apollo iOS installed via CocoaPods. Add these dependencies to your Podfile:
-
-```ruby
-pod 'Apollo', '~> 1.9'
-pod 'Apollo/SQLite', '~> 1.9'
+```
+┌─────────────────────┐
+│   App Layer         │
+├─────────────────────┤
+│   Domain Models     │
+├─────────────────────┤
+│   Kit Controllers   │
+├─────────────────────┤
+│   Apollo Client     │
+│  (with Cache)       │
+├─────────────────────┤
+│   GraphQL API       │
+└─────────────────────┘
 ```
 
-* GraphQL schema and generated Swift types are set up and integrated into your project.
+## 3. Implementation Details
 
-## Setting Up Apollo SQLite Normalized Cache
-
-Follow these detailed steps to enable and configure Apollo SQLite normalized caching:
-
-### Step 1: Initialize SQLite Cache
-
-Begin by setting up a SQLite cache to persist data across sessions:
+### 3.1 Apollo Cache Setup
 
 ```swift
 import Apollo
-import ApolloSQLite
+import ApolloAPI
 
-// Locate the documents directory on the device
-let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-
-// Define the SQLite file URL
-let sqliteFileURL = documentsURL.appendingPathComponent("apollo_cache.sqlite")
-
-// Initialize the SQLite normalized cache
-let sqliteCache = try SQLiteNormalizedCache(fileURL: sqliteFileURL)
-
-// Create an ApolloStore with the initialized SQLite cache
-let cacheStore = ApolloStore(cache: sqliteCache)
-```
-
-### Step 2: Setup Apollo Client with Cache
-
-Configure your Apollo client to utilize the cache and network transport:
-
-```swift
-// Create a default interceptor provider, necessary for request handling
-let interceptorProvider = DefaultInterceptorProvider(store: cacheStore)
-
-// Set up the network transport layer pointing to your GraphQL endpoint
-let networkTransport = RequestChainNetworkTransport(
-    interceptorProvider: interceptorProvider,
-    endpointURL: URL(string: "https://api.yourdomain.com/graphql")!
-)
-
-// Instantiate ApolloClient with configured network transport and cache store
-let apolloClient = ApolloClient(networkTransport: networkTransport, store: cacheStore)
-```
-
-## Implementing Cache Policies
-
-To effectively utilize Apollo's caching capabilities, expose cache policy options through your project's abstraction layer (`APICoreKit`). This approach gives developers clear control over data fetching strategies.
-
-### Defining Cache Policies
-
-Define custom policies that map clearly to Apollo’s cache policies:
-
-```swift
-enum DataFetchPolicy {
-    case networkOnly
-    case cacheFirst
-    case cacheOnly
-    case cacheAndNetwork
-}
-
-func fetchGraphQL<Query: GraphQLQuery>(
-    query: Query,
-    policy: DataFetchPolicy,
-    completion: @escaping (Result<Query.Data, Error>) -> Void
-) {
-    // Map your custom policy to Apollo's built-in cache policies
-    let apolloPolicy: CachePolicy
-    switch policy {
-    case .networkOnly:
-        apolloPolicy = .fetchIgnoringCacheData
-    case .cacheFirst:
-        apolloPolicy = .returnCacheDataElseFetch
-    case .cacheOnly:
-        apolloPolicy = .returnCacheDataDontFetch
-    case .cacheAndNetwork:
-        apolloPolicy = .returnCacheDataAndFetch
-    }
-
-    // Fetch data using the Apollo client with the specified cache policy
-    apolloClient.fetch(query: query, cachePolicy: apolloPolicy, resultHandler: completion)
+class ApolloClientManager {
+    static let shared = ApolloClientManager()
+    
+    private lazy var cache: InMemoryNormalizedCache = {
+        return InMemoryNormalizedCache()
+    }()
+    
+    private lazy var store: ApolloStore = {
+        return ApolloStore(cache: cache)
+    }()
+    
+    lazy var apolloClient: ApolloClient = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 30.0
+        
+        let client = URLSessionClient(sessionConfiguration: configuration)
+        let provider = DefaultInterceptorProvider(
+            client: client,
+            shouldInvalidateClientOnDeinit: true,
+            store: store
+        )
+        
+        let url = URL(string: "YOUR_GRAPHQL_ENDPOINT")!
+        let requestChainTransport = RequestChainNetworkTransport(
+            interceptorProvider: provider,
+            endpointURL: url
+        )
+        
+        return ApolloClient(
+            networkTransport: requestChainTransport,
+            store: store
+        )
+    }()
 }
 ```
 
-## Recommended Caching Strategies and Scenarios
+### 3.2 Cache Policy Mapping
 
-To maintain data consistency and user experience, follow these recommended cache policy scenarios:
-
-* **Initial App Launch & Pull-to-Refresh:** Use `.networkOnly`. Ensures the latest data is retrieved from the server.
-* **Navigating to Subsequent Screens:** Utilize `.cacheFirst`. Provides instant load times if data is already cached.
-* **User Logout:** Clear the entire cache to prevent data leaks between user sessions:
+#### Domain Cache Policy Enum
 
 ```swift
-apolloClient.store.clearCache { result in
-    switch result {
-    case .success:
-        print("Cache cleared successfully.")
-    case .failure(let error):
-        print("Cache clearing failed: \(error)")
+enum DomainCachePolicy {
+    case returnCacheDataElseFetch
+    case fetchIgnoringCacheData
+    case fetchIgnoringCacheCompletely
+    case returnCacheDataDontFetch
+    case returnCacheDataAndFetch
+    
+    var apolloCachePolicy: CachePolicy {
+        switch self {
+        case .returnCacheDataElseFetch:
+            return .returnCacheDataElseFetch
+        case .fetchIgnoringCacheData:
+            return .fetchIgnoringCacheData
+        case .fetchIgnoringCacheCompletely:
+            return .fetchIgnoringCacheCompletely
+        case .returnCacheDataDontFetch:
+            return .returnCacheDataDontFetch
+        case .returnCacheDataAndFetch:
+            return .returnCacheDataAndFetch
+        }
     }
 }
 ```
 
-## Handling Objects Without Unique Identifiers
+### 3.3 Kit Controller Implementation
 
-Apollo caches objects based on unique identifiers (`id`, `__typename`). When such identifiers aren't present:
+```swift
+protocol KitController {
+    associatedtype Query: GraphQLQuery
+    associatedtype DomainModel
+    
+    func execute(
+        query: Query,
+        cachePolicy: DomainCachePolicy,
+        completion: @escaping (Result<DomainModel, Error>) -> Void
+    )
+}
 
-* Apollo resorts to caching based on query-path hierarchy.
-* To ensure proper caching:
+class UserKitController: KitController {
+    typealias Query = GetUserQuery
+    typealias DomainModel = User
+    
+    private let apolloClient: ApolloClient
+    
+    init(apolloClient: ApolloClient = ApolloClientManager.shared.apolloClient) {
+        self.apolloClient = apolloClient
+    }
+    
+    func execute(
+        query: GetUserQuery,
+        cachePolicy: DomainCachePolicy = .returnCacheDataElseFetch,
+        completion: @escaping (Result<User, Error>) -> Void
+    ) {
+        apolloClient.fetch(
+            query: query,
+            cachePolicy: cachePolicy.apolloCachePolicy
+        ) { result in
+            switch result {
+            case .success(let graphQLResult):
+                if let data = graphQLResult.data {
+                    let user = self.mapToDomainModel(data)
+                    completion(.success(user))
+                } else if let errors = graphQLResult.errors {
+                    completion(.failure(GraphQLError.serverErrors(errors)))
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+    
+    private func mapToDomainModel(_ data: GetUserQuery.Data) -> User {
+        // Mapping logic here
+        return User(
+            id: data.user.id,
+            name: data.user.name,
+            email: data.user.email
+        )
+    }
+}
+```
 
-  * Consider updating your GraphQL schema to include unique identifiers.
-  * Alternatively, explicitly define composite cache keys through Apollo's type policies for advanced scenarios.
+### 3.4 Cache Management Interface
 
-## Advanced Caching Considerations
+#### APICoreKit Cache Interface
 
-Advanced caching scenarios, such as mutation caching and direct cache manipulation, are powerful but complex. Currently, these methods are out of scope to maintain simplicity and clarity in caching strategies. Normalized query caching adequately addresses most performance needs without additional complexity.
+```swift
+protocol CacheManageable {
+    func clearAllCache() async throws
+    func clearCache(for query: any GraphQLQuery) async throws
+    func clearCache(matching pattern: String) async throws
+}
 
----
+class APICoreKit: CacheManageable {
+    private let apolloStore: ApolloStore
+    
+    init(apolloStore: ApolloStore = ApolloClientManager.shared.apolloClient.store) {
+        self.apolloStore = apolloStore
+    }
+    
+    // MARK: - Clear All Cache
+    func clearAllCache() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            apolloStore.clearCache { result in
+                switch result {
+                case .success:
+                    continuation.resume()
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Clear Specific Query Cache
+    func clearCache(for query: any GraphQLQuery) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            apolloStore.withinReadWriteTransaction({ transaction in
+                try transaction.removeObject(for: query.cacheKey)
+            }, completion: { result in
+                switch result {
+                case .success:
+                    continuation.resume()
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            })
+        }
+    }
+    
+    // MARK: - Clear Cache by Pattern
+    func clearCache(matching pattern: String) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            apolloStore.withinReadWriteTransaction({ transaction in
+                let cacheKeys = try transaction.loadRecords(matching: pattern)
+                for key in cacheKeys {
+                    try transaction.removeObject(for: key)
+                }
+            }, completion: { result in
+                switch result {
+                case .success:
+                    continuation.resume()
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            })
+        }
+    }
+}
+```
 
-Following this comprehensive guide ensures effective caching practices, resulting in improved app performance and a better user experience.
+### 3.5 Kit-Level Cache Clearing
+
+```swift
+extension UserKitController {
+    func clearUserCache(userId: String) async throws {
+        let query = GetUserQuery(id: userId)
+        try await APICoreKit().clearCache(for: query)
+    }
+    
+    func clearAllUsersCache() async throws {
+        try await APICoreKit().clearCache(matching: "User:*")
+    }
+}
+```
+
+### 3.6 Session Management Integration
+
+```swift
+class SessionManager {
+    private let cacheManager: CacheManageable
+    
+    init(cacheManager: CacheManageable = APICoreKit()) {
+        self.cacheManager = cacheManager
+    }
+    
+    func handleSessionTimeout() async {
+        do {
+            try await cacheManager.clearAllCache()
+            // Additional session cleanup
+        } catch {
+            print("Failed to clear cache on session timeout: \(error)")
+        }
+    }
+    
+    func handleLogout() async {
+        do {
+            try await cacheManager.clearAllCache()
+            // Additional logout cleanup
+        } catch {
+            print("Failed to clear cache on logout: \(error)")
+        }
+    }
+}
+```
+
+## 4. Time-Based Cache Expiration
+
+### 4.1 Custom Cache Policy with TTL
+
+Since Apollo iOS doesn't provide built-in time-based cache expiration, we'll implement a custom solution:
+
+```swift
+struct CacheMetadata {
+    let timestamp: Date
+    let ttl: TimeInterval
+    
+    var isExpired: Bool {
+        return Date().timeIntervalSince(timestamp) > ttl
+    }
+}
+
+class TimedCacheManager {
+    private var cacheMetadata: [String: CacheMetadata] = [:]
+    private let queue = DispatchQueue(label: "com.app.cache.metadata", attributes: .concurrent)
+    
+    func recordCacheWrite(for key: String, ttl: TimeInterval) {
+        queue.async(flags: .barrier) {
+            self.cacheMetadata[key] = CacheMetadata(
+                timestamp: Date(),
+                ttl: ttl
+            )
+        }
+    }
+    
+    func isExpired(for key: String) -> Bool {
+        queue.sync {
+            guard let metadata = cacheMetadata[key] else { return true }
+            return metadata.isExpired
+        }
+    }
+    
+    func clearExpiredCache() async throws {
+        let expiredKeys = queue.sync {
+            cacheMetadata.compactMap { key, metadata in
+                metadata.isExpired ? key : nil
+            }
+        }
+        
+        let coreKit = APICoreKit()
+        for key in expiredKeys {
+            try await coreKit.clearCache(matching: key)
+        }
+        
+        queue.async(flags: .barrier) {
+            expiredKeys.forEach { self.cacheMetadata.removeValue(forKey: $0) }
+        }
+    }
+}
+```
+
+### 4.2 Enhanced Kit Controller with TTL
+
+```swift
+class EnhancedUserKitController: UserKitController {
+    private let timedCacheManager = TimedCacheManager()
+    
+    func execute(
+        query: GetUserQuery,
+        cachePolicy: DomainCachePolicy = .returnCacheDataElseFetch,
+        ttl: TimeInterval? = nil,
+        completion: @escaping (Result<User, Error>) -> Void
+    ) {
+        // Check if cache is expired
+        if let ttl = ttl,
+           timedCacheManager.isExpired(for: query.cacheKey) {
+            // Force fetch if expired
+            super.execute(
+                query: query,
+                cachePolicy: .fetchIgnoringCacheData,
+                completion: { result in
+                    if case .success = result {
+                        self.timedCacheManager.recordCacheWrite(
+                            for: query.cacheKey,
+                            ttl: ttl
+                        )
+                    }
+                    completion(result)
+                }
+            )
+        } else {
+            super.execute(query: query, cachePolicy: cachePolicy, completion: completion)
+        }
+    }
+}
+```
+
+## 5. Unique ID Management
+
+### 5.1 GraphQL Schema Requirements
+
+Ensure all GraphQL types include a unique identifier:
+
+```graphql
+type User {
+  id: ID! # Server-generated unique identifier
+  name: String!
+  email: String!
+}
+
+type Post {
+  id: ID! # Server-generated unique identifier
+  title: String!
+  content: String!
+  author: User!
+}
+```
+
+### 5.2 Cache Key Policy Configuration
+
+```swift
+extension ApolloClientManager {
+    private func configureCacheKeyInfo() -> CacheKeyInfo {
+        return CacheKeyInfo { object in
+            // Use 'id' field as the cache key for all objects
+            if let id = object["id"] as? String {
+                return id
+            }
+            // Fallback to default behavior
+            return nil
+        }
+    }
+    
+    private func createStore() -> ApolloStore {
+        return ApolloStore(
+            cache: cache,
+            cacheKeyInfo: configureCacheKeyInfo()
+        )
+    }
+}
+```
+
+## 6. Best Practices
+
+### 6.1 Cache Policy Selection Guide
+
+| Scenario | Recommended Policy | TTL |
+|----------|-------------------|-----|
+| User Profile | returnCacheDataElseFetch | 5 minutes |
+| Static Content | returnCacheDataDontFetch | 1 hour |
+| Real-time Data | fetchIgnoringCacheData | N/A |
+| List Views | returnCacheDataAndFetch | 2 minutes |
+| Form Submissions | fetchIgnoringCacheCompletely | N/A |
+
+### 6.2 Memory Management
+
+```swift
+class CacheMemoryManager {
+    static func setupMemoryWarningObserver() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task {
+                try? await APICoreKit().clearAllCache()
+            }
+        }
+    }
+}
+```
+
+### 6.3 Error Handling
+
+```swift
+enum CacheError: Error {
+    case clearingFailed(underlying: Error)
+    case invalidCacheKey
+    case cacheNotFound
+}
+
+extension APICoreKit {
+    func safeClearCache() async -> Result<Void, CacheError> {
+        do {
+            try await clearAllCache()
+            return .success(())
+        } catch {
+            return .failure(.clearingFailed(underlying: error))
+        }
+    }
+}
+```
+
+## 7. Testing Strategy
+
+### 7.1 Unit Tests
+
+```swift
+class CacheTests: XCTestCase {
+    var apolloClient: ApolloClient!
+    var cacheManager: APICoreKit!
+    
+    override func setUp() {
+        super.setUp()
+        let cache = InMemoryNormalizedCache()
+        let store = ApolloStore(cache: cache)
+        // Setup test Apollo client
+        cacheManager = APICoreKit(apolloStore: store)
+    }
+    
+    func testCacheClearingOnLogout() async throws {
+        // Add test data to cache
+        // Clear cache
+        try await cacheManager.clearAllCache()
+        // Verify cache is empty
+    }
+    
+    func testSpecificQueryCacheClearing() async throws {
+        // Test implementation
+    }
+}
+```
+
+## 8. Migration Plan
+
+1. **Phase 1**: Implement cache infrastructure
+2. **Phase 2**: Update kit controllers with cache policy parameters
+3. **Phase 3**: Integrate session management cache clearing
+4. **Phase 4**: Add time-based expiration
+5. **Phase 5**: Performance monitoring and optimization
+
+## 9. Monitoring and Metrics
+
+- Cache hit/miss ratio
+- Memory usage
+- Response times (cached vs network)
+- Cache clearing frequency
+- Error rates
