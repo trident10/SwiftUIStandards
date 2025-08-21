@@ -1,14 +1,8 @@
 class Solution {
     func solution(_ S: String) -> String {
         // STEP 1: Count how many times each digit appears
-        // Think of it like sorting candies by color
         var digitCount = [Int](repeating: 0, count: 10)
         
-        // Example: "39878" gives us:
-        // digitCount[3] = 1
-        // digitCount[7] = 1  
-        // digitCount[8] = 2
-        // digitCount[9] = 1
         for char in S {
             if let digit = Int(String(char)) {
                 digitCount[digit] += 1
@@ -24,17 +18,14 @@ class Solution {
             let count = digitCount[digit]
             
             // How many PAIRS can we make?
-            // Example: if we have 5 eights, we can make 2 pairs (4 eights)
             let pairs = count / 2
             
             // Add these pairs to our first half
-            // Example: 2 pairs of 8 → "88" goes to firstHalf
             if pairs > 0 {
                 firstHalf += String(repeating: String(digit), count: pairs)
             }
             
-            // Is there a leftover digit? Save the BIGGEST one for middle
-            // Example: if we have 3 nines, we use 2 for pairs, save 1 for middle
+            // Save the BIGGEST leftover digit for middle
             if count % 2 == 1 && middleDigit.isEmpty {
                 middleDigit = String(digit)
             }
@@ -42,23 +33,24 @@ class Solution {
         
         // STEP 3: Handle special cases
         
-        // Case 1: All zeros like "0000" → return "0"
-        if firstHalf.allSatisfy({ $0 == "0" }) && middleDigit == "0" {
-            return "0"
+        // Case: No pairs at all, only single digits
+        // Example: "54321" → return biggest digit "5"
+        if firstHalf.isEmpty {
+            return middleDigit.isEmpty ? "0" : middleDigit
         }
         
-        // Case 2: Leading zeros problem
-        // Example: "00900" would give us "00900" but we can't have leading zeros!
-        // So we return just "9" (the middle digit)
-        if firstHalf.first == "0" {
-            if !middleDigit.isEmpty {
-                return middleDigit  // Return single digit
+        // Case: Leading zeros problem
+        // Example: "00900" → firstHalf="00", middle="9"
+        // We can't have "00900", so return "9"
+        if firstHalf.allSatisfy({ $0 == "0" }) {
+            // If we only have zero pairs
+            if !middleDigit.isEmpty && middleDigit != "0" {
+                return middleDigit  // Return the non-zero middle digit
             }
-            return "0"
+            return "0"  // All zeros case: "0000" → "0"
         }
         
         // STEP 4: Build the final palindrome
-        // palindrome = firstHalf + middle + firstHalf reversed
         let secondHalf = String(firstHalf.reversed())
         let palindrome = firstHalf + middleDigit + secondHalf
         
@@ -67,52 +59,70 @@ class Solution {
 }
 
 // ==========================================
-// VISUAL EXAMPLES TO UNDERSTAND
+// TEST CASES WITH DETAILED TRACING
 // ==========================================
 
 let solution = Solution()
 
-print("=== Example 1: '39878' ===")
-print("Input digits: 3, 9, 8, 7, 8")
-print("Count: 3→1, 7→1, 8→2, 9→1")
-print("Pairs we can use: 8→1 pair (two 8s)")
-print("Leftover for middle: 9 (biggest leftover)")
-print("Build: '8' + '9' + '8' = '898'")
-print("Result: \(solution.solution("39878"))\n")
+print("=== Test 1: '39878' ===")
+print("Step-by-step:")
+print("  Counts: 3→1, 7→1, 8→2, 9→1")
+print("  Pairs: 8→1 pair")
+print("  firstHalf: '8'")
+print("  middleDigit: '9' (biggest odd count)")
+print("  Result: '8' + '9' + '8' = '898'")
+print("  Actual: \(solution.solution("39878"))")
+print()
 
-print("=== Example 2: '00900' ===")
-print("Input digits: 0, 0, 9, 0, 0")
-print("Count: 0→4, 9→1")
-print("Pairs we can use: 0→2 pairs (four 0s)")
-print("Leftover for middle: 9")
-print("Build: '00' + '9' + '00' = '00900' ❌ (leading zeros!)")
-print("Fix: Return just '9'")
-print("Result: \(solution.solution("00900"))\n")
+print("=== Test 2: '00900' ===")
+print("Step-by-step:")
+print("  Counts: 0→4, 9→1")
+print("  Pairs: 0→2 pairs")
+print("  firstHalf: '00'")
+print("  middleDigit: '9'")
+print("  firstHalf is all zeros? YES")
+print("  middleDigit is not '0'? YES")
+print("  Return just middleDigit: '9'")
+print("  Actual: \(solution.solution("00900"))")
+print()
 
-print("=== Example 3: '129321' ===")
-print("Input digits: 1, 2, 9, 3, 2, 1")
-print("Count: 1→2, 2→2, 3→1, 9→1")
-print("Pairs: 1→1 pair, 2→1 pair")
-print("Middle: 9 (biggest odd count)")
-print("Build from biggest: ")
-print("  - No 9 pairs")
-print("  - No 8,7,6,5,4 at all")
-print("  - 3 has odd count (save for middle)")
-print("  - 2 has 1 pair → firstHalf = '2'")
-print("  - 1 has 1 pair → firstHalf = '21'")
-print("Final: '21' + '3' + '12' = '21312'")
-print("Result: \(solution.solution("129321"))\n")
+print("=== Test 3: '0000' ===")
+print("Step-by-step:")
+print("  Counts: 0→4")
+print("  Pairs: 0→2 pairs")
+print("  firstHalf: '00'")
+print("  middleDigit: '' (even count, no leftover)")
+print("  firstHalf is all zeros? YES")
+print("  middleDigit is empty? YES")
+print("  Return: '0'")
+print("  Actual: \(solution.solution("0000"))")
+print()
 
-// ==========================================
-// HOW PALINDROMES WORK
-// ==========================================
-print("=== What is a Palindrome? ===")
-print("A palindrome reads the same forwards and backwards:")
-print("• 898 → 8-9-8 (same both ways ✓)")
-print("• 12321 → 1-2-3-2-1 (same both ways ✓)")
-print("• 123 → NOT a palindrome ✗")
-print("\n=== Key Rules ===")
-print("1. We can only use the digits we're given")
-print("2. We want the LARGEST possible number")
-print("3. No leading zeros (099 is not valid)")
-print("4. For middle position, we can use only 1 digit")
+print("=== Test 4: '54321' ===")
+print("Step-by-step:")
+print("  Counts: 1→1, 2→1, 3→1, 4→1, 5→1")
+print("  Pairs: none (all single digits)")
+print("  firstHalf: '' (empty)")
+print("  middleDigit: '5' (biggest)")
+print("  firstHalf is empty? YES")
+print("  Return middleDigit: '5'")
+print("  Actual: \(solution.solution("54321"))")
+print()
+
+print("=== Test 5: '129321' ===")
+print("Step-by-step:")
+print("  Counts: 1→2, 2→2, 3→1, 9→1")
+print("  Processing from 9 to 0:")
+print("    9: 0 pairs, save for middle")
+print("    3: 0 pairs, skip (already have 9 for middle)")
+print("    2: 1 pair → firstHalf = '2'")
+print("    1: 1 pair → firstHalf = '21'")
+print("  Result: '21' + '9' + '12' = '21912'")
+print("  Actual: \(solution.solution("129321"))")
+print()
+
+print("=== Additional Edge Cases ===")
+print("'000': \(solution.solution("000"))") // Should be "0"
+print("'00000': \(solution.solution("00000"))") // Should be "0"
+print("'001': \(solution.solution("001"))") // Should be "1"
+print("'0012200': \(solution.solution("0012200"))") // Should be "20102"
