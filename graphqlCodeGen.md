@@ -1,127 +1,12 @@
-# GraphQL Code Generation with Git Integration
-
-## Project Structure
-
-```
-GraphQLCodeGen/
-├── Sources/
-│   ├── main.swift                    # Main entry point
-│   ├── Configuration.swift           # Configuration management
-│   ├── Logger.swift                  # Logging utilities
-│   ├── CommandLineOptions.swift      # CLI argument parsing
-│   ├── GitManager.swift              # Git operations (new)
-│   ├── ApolloCLI.swift              # Apollo CLI wrapper
-│   ├── ProcessExecutor.swift        # Process execution utilities
-│   └── ChangeTracker.swift          # Track generation history (new)
-├── .last-generation                  # Stores last processed commit hash
-└── apollo-codegen-config.json       # Apollo configuration
-
-```
-
-## File Implementations
-
-### 1. main.swift
-```swift
 #!/usr/bin/env swift
 
 import Foundation
 
-// Main entry point - orchestrates the entire process
-func main() {
-    let options = CommandLineOptions(arguments: CommandLine.arguments)
-    
-    if options.showHelp {
-        showHelp()
-        exit(0)
-    }
-    
-    let logger = Logger(level: options.logLevel)
-    let config = Configuration()
-    let gitManager = GitManager(config: config, logger: logger)
-    let changeTracker = ChangeTracker(config: config, logger: logger)
-    let apolloCLI = ApolloCLI(config: config, logger: logger)
-    
-    logger.info("🔧 GraphQL Code Generation with Git Integration")
-    logger.info("================================================")
-    
-    do {
-        // Step 1: Check if we need to update from git
-        logger.info("\n📥 Checking for repository updates...")
-        let needsUpdate = try gitManager.checkForUpdates()
-        
-        if !needsUpdate {
-            logger.success("No changes detected since last generation. Skipping...")
-            exit(0)
-        }
-        
-        // Step 2: Clone or update the repository
-        logger.info("\n📦 Updating repository...")
-        let currentCommit = try gitManager.cloneOrUpdate()
-        
-        // Step 3: Validate schema and operations folders exist
-        try gitManager.validateRepoStructure()
-        
-        // Step 4: Update Apollo config with paths from repo
-        try updateApolloConfig(with: gitManager.getSchemaPath(), 
-                              operationsPath: gitManager.getOperationsPath())
-        
-        // Step 5: Generate GraphQL code
-        logger.info("\n🚀 Generating GraphQL code...")
-        let executable = try apolloCLI.validatePrerequisites()
-        try apolloCLI.generateCode(using: executable)
-        
-        // Step 6: Save the current commit hash for next run
-        try changeTracker.saveLastProcessedCommit(currentCommit)
-        
-        logger.info("")
-        logger.success("✨ Code generation completed successfully!")
-        exit(0)
-        
-    } catch {
-        logger.error("Error: \(error.localizedDescription)")
-        exit(1)
-    }
-}
-
-func showHelp() {
-    print("""
-    GraphQL Code Generation Script with Git Integration
-    
-    Usage: swift main.swift [OPTIONS]
-    
-    OPTIONS:
-        --verbose, -v    Enable verbose output
-        --quiet, -q      Suppress all output except errors
-        --force, -f      Force regeneration even if no changes detected
-        --help, -h       Show this help message
-    
-    DESCRIPTION:
-        1. Checks git repository for updates
-        2. Clones or updates the repository
-        3. Generates GraphQL code only if changes are detected
-        4. Tracks last processed commit to avoid duplicates
-    
-    GIT REPOSITORY:
-        URL: \(Configuration().gitRepoURL)
-        Local: \(Configuration().localRepoPath.path)
-    """)
-}
-
-func updateApolloConfig(with schemaPath: URL, operationsPath: URL) throws {
-    // Update apollo-codegen-config.json with correct paths
-    // This would modify the config to point to the checked out repo paths
-}
-
-main()
-```
-
-### 2. Configuration.swift
-```swift
-import Foundation
+// MARK: - Configuration
 
 struct Configuration {
     // MARK: - Git Configuration
-    let gitRepoURL = "https://github.com/your-org/graphql-schemas.git" // PLACEHOLDER
+    let gitRepoURL = "https://github.com/your-org/graphql-schemas.git" // PLACEHOLDER - UPDATE THIS!
     let gitBranch = "main"
     
     // MARK: - Paths
@@ -154,11 +39,8 @@ struct Configuration {
     let maxRetries = 3
     let retryDelay: TimeInterval = 2.0
 }
-```
 
-### 3. Logger.swift
-```swift
-import Foundation
+// MARK: - Logger
 
 enum LogLevel {
     case quiet, normal, verbose
@@ -204,11 +86,8 @@ struct Logger {
         print("⏳ \(message)")
     }
 }
-```
 
-### 4. CommandLineOptions.swift
-```swift
-import Foundation
+// MARK: - Command Line Options
 
 struct CommandLineOptions {
     var logLevel: LogLevel = .normal
@@ -239,11 +118,56 @@ struct CommandLineOptions {
         }
     }
 }
-```
 
-### 5. GitManager.swift
-```swift
-import Foundation
+// MARK: - Process Executor
+
+struct ProcessResult {
+    let exitCode: Int32
+    let output: String
+    let errorOutput: String
+}
+
+class ProcessExecutor {
+    func execute(_ command: String, 
+                arguments: [String] = [], 
+                workingDirectory: URL? = nil) -> ProcessResult? {
+        let process = Process()
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        
+        process.executableURL = URL(fileURLWithPath: command)
+        process.arguments = arguments
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        
+        if let workingDir = workingDirectory {
+            process.currentDirectoryURL = workingDir
+        }
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
+            
+            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            
+            return ProcessResult(
+                exitCode: process.terminationStatus,
+                output: String(data: outputData, encoding: .utf8) ?? "",
+                errorOutput: String(data: errorData, encoding: .utf8) ?? ""
+            )
+        } catch {
+            return nil
+        }
+    }
+    
+    func commandExists(_ command: String) -> Bool {
+        let result = execute("/usr/bin/which", arguments: [command])
+        return result?.exitCode == 0
+    }
+}
+
+// MARK: - Git Manager
 
 class GitManager {
     enum GitError: Error, LocalizedError {
@@ -284,22 +208,18 @@ class GitManager {
         self.logger = logger
     }
     
-    /// Checks if there are updates available in the remote repository
     func checkForUpdates() throws -> Bool {
         logger.verbose("Checking for repository updates...")
         
-        // Check if git is installed
         guard executor.commandExists("git") else {
             throw GitError.gitNotInstalled
         }
         
-        // If repo doesn't exist locally, we need to update
         if !FileManager.default.fileExists(atPath: config.localRepoPath.path) {
             logger.verbose("Local repository doesn't exist. Update needed.")
             return true
         }
         
-        // Fetch latest changes from remote without merging
         let fetchResult = executor.execute(
             "git",
             arguments: ["fetch", "origin", config.gitBranch],
@@ -310,7 +230,6 @@ class GitManager {
             throw GitError.fetchFailed(fetchResult?.errorOutput ?? "Unknown error")
         }
         
-        // Compare local and remote HEAD
         let localHead = try getCommitHash("HEAD")
         let remoteHead = try getCommitHash("origin/\(config.gitBranch)")
         
@@ -320,7 +239,6 @@ class GitManager {
         return localHead != remoteHead
     }
     
-    /// Clones the repository if it doesn't exist, or updates it if it does
     func cloneOrUpdate() throws -> String {
         if !FileManager.default.fileExists(atPath: config.localRepoPath.path) {
             try cloneRepository()
@@ -340,7 +258,7 @@ class GitManager {
                 "clone",
                 "--branch", config.gitBranch,
                 "--single-branch",
-                "--depth", "1",  // Shallow clone for efficiency
+                "--depth", "1",
                 config.gitRepoURL,
                 config.localRepoPath.path
             ]
@@ -356,14 +274,12 @@ class GitManager {
     private func updateRepository() throws {
         logger.info("Updating existing repository...")
         
-        // Reset any local changes
         _ = executor.execute(
             "git",
             arguments: ["reset", "--hard"],
             workingDirectory: config.localRepoPath
         )
         
-        // Pull latest changes
         let result = executor.execute(
             "git",
             arguments: ["pull", "origin", config.gitBranch],
@@ -417,11 +333,8 @@ class GitManager {
             .appendingPathComponent(config.operationsFolderName)
     }
 }
-```
 
-### 6. ChangeTracker.swift
-```swift
-import Foundation
+// MARK: - Change Tracker
 
 class ChangeTracker {
     private let config: Configuration
@@ -432,7 +345,6 @@ class ChangeTracker {
         self.logger = logger
     }
     
-    /// Retrieves the last processed commit hash
     func getLastProcessedCommit() -> String? {
         guard FileManager.default.fileExists(atPath: config.lastGenerationFile.path) else {
             logger.verbose("No previous generation record found")
@@ -455,7 +367,6 @@ class ChangeTracker {
         return nil
     }
     
-    /// Saves the current commit hash for future reference
     func saveLastProcessedCommit(_ hash: String) throws {
         let content = """
         commit:\(hash)
@@ -467,7 +378,6 @@ class ChangeTracker {
         logger.verbose("Saved commit hash: \(hash)")
     }
     
-    /// Checks if generation is needed based on commit history
     func needsGeneration(currentCommit: String, forceRegeneration: Bool = false) -> Bool {
         if forceRegeneration {
             logger.info("Force regeneration requested")
@@ -487,46 +397,9 @@ class ChangeTracker {
         logger.info("New commit detected. Generation needed.")
         return true
     }
-    
-    /// Gets metadata about the last generation
-    func getLastGenerationMetadata() -> [String: String]? {
-        guard FileManager.default.fileExists(atPath: config.lastGenerationFile.path) else {
-            return nil
-        }
-        
-        do {
-            let content = try String(contentsOf: config.lastGenerationFile)
-            var metadata: [String: String] = [:]
-            
-            for line in content.components(separatedBy: .newlines) {
-                let parts = line.split(separator: ":", maxSplits: 1)
-                if parts.count == 2 {
-                    metadata[String(parts[0])] = String(parts[1])
-                }
-            }
-            
-            // Add human-readable timestamp
-            if let timestampStr = metadata["timestamp"],
-               let timestamp = Double(timestampStr) {
-                let date = Date(timeIntervalSince1970: timestamp)
-                let formatter = DateFormatter()
-                formatter.dateStyle = .medium
-                formatter.timeStyle = .medium
-                metadata["lastGenerated"] = formatter.string(from: date)
-            }
-            
-            return metadata
-        } catch {
-            logger.warning("Could not parse generation metadata: \(error)")
-            return nil
-        }
-    }
 }
-```
 
-### 7. ApolloCLI.swift
-```swift
-import Foundation
+// MARK: - Apollo CLI
 
 class ApolloCLI {
     enum CLIError: Error, LocalizedError {
@@ -558,9 +431,8 @@ class ApolloCLI {
     func findExecutable() -> String? {
         logger.verbose("Searching for Apollo iOS CLI...")
         
-        // Check common locations
         let searchPaths = [
-            "apollo-ios-cli",  // Global installation
+            "apollo-ios-cli",
             config.baseDirectory.appendingPathComponent("../node_modules/.bin/apollo-ios-cli").path,
             "/usr/local/bin/apollo-ios-cli"
         ]
@@ -572,7 +444,6 @@ class ApolloCLI {
             }
         }
         
-        // Try npx fallback
         if executor.commandExists("npx") {
             let result = executor.execute("npx", arguments: ["--quiet", "apollo-ios-cli", "--version"])
             if result?.exitCode == 0 {
@@ -587,12 +458,10 @@ class ApolloCLI {
     func validatePrerequisites() throws -> String {
         logger.verbose("Validating Apollo CLI prerequisites...")
         
-        // Check configuration file
         guard FileManager.default.fileExists(atPath: config.configPath.path) else {
             throw CLIError.configNotFound(config.configPath.path)
         }
         
-        // Find Apollo CLI
         guard let executable = findExecutable() else {
             throw CLIError.notFound
         }
@@ -625,114 +494,144 @@ class ApolloCLI {
         }
     }
 }
-```
 
-### 8. ProcessExecutor.swift
-```swift
-import Foundation
+// MARK: - Main Functions
 
-struct ProcessResult {
-    let exitCode: Int32
-    let output: String
-    let errorOutput: String
+func showHelp(config: Configuration) {
+    print("""
+    GraphQL Code Generation Script with Git Integration
+    
+    Usage: swift GraphQLGen.swift [OPTIONS]
+           ./GraphQLGen.swift [OPTIONS]  (if executable)
+    
+    OPTIONS:
+        --verbose, -v    Enable verbose output
+        --quiet, -q      Suppress all output except errors
+        --force, -f      Force regeneration even if no changes detected
+        --skip-git       Skip git operations (use existing local files)
+        --help, -h       Show this help message
+    
+    DESCRIPTION:
+        1. Checks git repository for updates
+        2. Clones or updates the repository
+        3. Generates GraphQL code only if changes are detected
+        4. Tracks last processed commit to avoid duplicates
+    
+    GIT REPOSITORY:
+        URL: \(config.gitRepoURL)
+        Branch: \(config.gitBranch)
+        Local: \(config.localRepoPath.path)
+    
+    EXAMPLES:
+        swift GraphQLGen.swift
+        swift GraphQLGen.swift --verbose
+        swift GraphQLGen.swift --force
+        ./GraphQLGen.swift --quiet
+    """)
 }
 
-class ProcessExecutor {
-    func execute(_ command: String, 
-                arguments: [String] = [], 
-                workingDirectory: URL? = nil) -> ProcessResult? {
-        let process = Process()
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        
-        process.executableURL = URL(fileURLWithPath: command)
-        process.arguments = arguments
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-        
-        if let workingDir = workingDirectory {
-            process.currentDirectoryURL = workingDir
-        }
-        
-        do {
-            try process.run()
-            process.waitUntilExit()
-            
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            
-            return ProcessResult(
-                exitCode: process.terminationStatus,
-                output: String(data: outputData, encoding: .utf8) ?? "",
-                errorOutput: String(data: errorData, encoding: .utf8) ?? ""
-            )
-        } catch {
-            return nil
-        }
+func updateApolloConfig(config: Configuration, schemaPath: URL, operationsPath: URL) throws {
+    // This function would update the apollo-codegen-config.json
+    // with the correct paths from the checked out repository
+    // For now, this is a placeholder implementation
+    
+    // In a real implementation, you would:
+    // 1. Read the existing apollo-codegen-config.json
+    // 2. Update the schema and operations paths
+    // 3. Write it back
+    
+    // Example structure of apollo-codegen-config.json:
+    let configContent = """
+    {
+      "schemaSearchPaths": [
+        "\(schemaPath.path)/**/*.graphqls"
+      ],
+      "operationSearchPaths": [
+        "\(operationsPath.path)/**/*.graphql"
+      ],
+      "outputPath": "./Generated"
+    }
+    """
+    
+    // For now, just validate that config exists
+    if !FileManager.default.fileExists(atPath: config.configPath.path) {
+        // Create a default config if it doesn't exist
+        try configContent.write(to: config.configPath, atomically: true, encoding: .utf8)
+    }
+}
+
+func main() {
+    let options = CommandLineOptions(arguments: CommandLine.arguments)
+    let config = Configuration()
+    
+    if options.showHelp {
+        showHelp(config: config)
+        exit(0)
     }
     
-    func commandExists(_ command: String) -> Bool {
-        let result = execute("/usr/bin/which", arguments: [command])
-        return result?.exitCode == 0
+    let logger = Logger(level: options.logLevel)
+    let gitManager = GitManager(config: config, logger: logger)
+    let changeTracker = ChangeTracker(config: config, logger: logger)
+    let apolloCLI = ApolloCLI(config: config, logger: logger)
+    
+    logger.info("🔧 GraphQL Code Generation with Git Integration")
+    logger.info("================================================")
+    
+    do {
+        var currentCommit: String = ""
+        
+        if !options.skipGitUpdate {
+            // Step 1: Check if we need to update from git
+            logger.info("\n📥 Checking for repository updates...")
+            
+            if !options.forceRegeneration {
+                let lastCommit = changeTracker.getLastProcessedCommit()
+                if lastCommit != nil {
+                    let needsUpdate = try gitManager.checkForUpdates()
+                    if !needsUpdate {
+                        logger.success("No changes detected since last generation. Skipping...")
+                        logger.info("Use --force to regenerate anyway")
+                        exit(0)
+                    }
+                }
+            }
+            
+            // Step 2: Clone or update the repository
+            logger.info("\n📦 Updating repository...")
+            currentCommit = try gitManager.cloneOrUpdate()
+            
+            // Step 3: Validate schema and operations folders exist
+            try gitManager.validateRepoStructure()
+            
+            // Step 4: Update Apollo config with paths from repo
+            try updateApolloConfig(
+                config: config,
+                schemaPath: gitManager.getSchemaPath(),
+                operationsPath: gitManager.getOperationsPath()
+            )
+        } else {
+            logger.info("Skipping git operations (--skip-git flag)")
+        }
+        
+        // Step 5: Generate GraphQL code
+        logger.info("\n🚀 Generating GraphQL code...")
+        let executable = try apolloCLI.validatePrerequisites()
+        try apolloCLI.generateCode(using: executable)
+        
+        // Step 6: Save the current commit hash for next run
+        if !options.skipGitUpdate && !currentCommit.isEmpty {
+            try changeTracker.saveLastProcessedCommit(currentCommit)
+        }
+        
+        logger.info("")
+        logger.success("✨ Code generation completed successfully!")
+        exit(0)
+        
+    } catch {
+        logger.error("Error: \(error.localizedDescription)")
+        exit(1)
     }
 }
-```
 
-## Change Detection Strategy Explanation
-
-### How It Works:
-
-1. **Commit Hash Tracking**: The system stores the SHA hash of the last successfully processed commit in a `.last-generation` file. This serves as a checkpoint.
-
-2. **Remote Repository Checking**: 
-   - Before any generation, the script fetches the latest changes from the remote repository
-   - Compares the remote HEAD commit with the local HEAD commit
-   - If they differ, updates are available
-
-3. **Efficient Updates**:
-   - **Shallow Clone**: Uses `--depth 1` for initial clone to save bandwidth
-   - **Fetch Before Pull**: Only fetches metadata first to check for changes
-   - **Pull Only When Needed**: Only pulls full changes if generation is required
-
-4. **Generation Decision Logic**:
-   ```
-   IF no local repo exists → Clone and Generate
-   ELSE IF --force flag used → Generate
-   ELSE IF no .last-generation file → Generate
-   ELSE
-     Fetch remote changes
-     IF remote HEAD ≠ stored commit hash → Pull and Generate
-     ELSE → Skip (no changes)
-   ```
-
-5. **Benefits**:
-   - **Avoids Redundant Work**: Skips generation when schema/operations haven't changed
-   - **Network Efficient**: Only pulls full repository when needed
-   - **Reproducible**: Can force regeneration with `--force` flag
-   - **Auditable**: Tracks when and what commit was last processed
-
-### Additional Features:
-
-- **Retry Logic**: Can retry failed git operations with configurable delays
-- **Branch Support**: Can track specific branches
-- **Metadata Storage**: Stores timestamp and branch info for debugging
-- **Verbose Logging**: Detailed logs for troubleshooting
-- **Error Recovery**: Handles corrupted repos by re-cloning if needed
-
-### Usage Examples:
-
-```bash
-# Normal run - checks for changes
-swift main.swift
-
-# Force regeneration even without changes
-swift main.swift --force
-
-# Verbose output for debugging
-swift main.swift --verbose
-
-# Skip git operations (use existing local files)
-swift main.swift --skip-git
-```
-
-This architecture provides a robust, maintainable solution that efficiently manages GraphQL schema updates while avoiding unnecessary regeneration.
+// Execute main function
+main()
