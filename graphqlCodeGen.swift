@@ -6,6 +6,7 @@ import Foundation
 
 struct Configuration {
     // MARK: - Git Configuration
+    // TODO: IMPORTANT - Update this to your actual GraphQL repository URL!
     let gitRepoURL = "https://github.com/your-org/graphql-schemas.git" // PLACEHOLDER - UPDATE THIS!
     let gitBranch = "main"
     
@@ -64,26 +65,26 @@ struct Logger {
     func verbose(_ message: String) {
         guard level == .verbose else { return }
         let timestamp = dateFormatter.string(from: Date())
-        print("[\(timestamp)] 🔍 \(message)")
+        print("[\(timestamp)] ðŸ" \(message)")
     }
     
     func success(_ message: String) {
         guard level != .quiet else { return }
-        print("✅ \(message)")
+        print("âœ… \(message)")
     }
     
     func error(_ message: String) {
-        fputs("❌ \(message)\n", stderr)
+        fputs("âŒ \(message)\n", stderr)
     }
     
     func warning(_ message: String) {
         guard level != .quiet else { return }
-        print("⚠️ \(message)")
+        print("âš ï¸ \(message)")
     }
     
     func progress(_ message: String) {
         guard level != .quiet else { return }
-        print("⏳ \(message)")
+        print("â³ \(message)")
     }
 }
 
@@ -112,7 +113,7 @@ struct CommandLineOptions {
                 if !arg.starts(with: "-") {
                     continue
                 }
-                print("❌ Unknown option: \(arg)")
+                print("âŒ Unknown option: \(arg)")
                 showHelp = true
             }
         }
@@ -199,7 +200,7 @@ class GitManager {
         }
     }
     
-    private let config: Configuration
+    private var config: Configuration
     private let logger: Logger
     private let executor = ProcessExecutor()
     
@@ -251,6 +252,7 @@ class GitManager {
     
     private func cloneRepository() throws {
         logger.info("Cloning repository from \(config.gitRepoURL)...")
+        logger.verbose("Clone destination: \(config.localRepoPath.path)")
         
         let result = executor.execute(
             "git",
@@ -265,7 +267,20 @@ class GitManager {
         )
         
         if result?.exitCode != 0 {
-            throw GitError.cloneFailed(result?.errorOutput ?? "Unknown error")
+            let errorMsg = result?.errorOutput ?? ""
+            let outputMsg = result?.output ?? ""
+            let exitCode = result?.exitCode ?? -1
+            
+            logger.error("Git clone failed with exit code: \(exitCode)")
+            if !errorMsg.isEmpty {
+                logger.error("Error output: \(errorMsg)")
+            }
+            if !outputMsg.isEmpty {
+                logger.error("Standard output: \(outputMsg)")
+            }
+            
+            let combinedError = !errorMsg.isEmpty ? errorMsg : (!outputMsg.isEmpty ? outputMsg : "No error details available")
+            throw GitError.cloneFailed(combinedError)
         }
         
         logger.success("Repository cloned successfully")
@@ -287,7 +302,20 @@ class GitManager {
         )
         
         if result?.exitCode != 0 {
-            throw GitError.fetchFailed(result?.errorOutput ?? "Unknown error")
+            let errorMsg = result?.errorOutput ?? ""
+            let outputMsg = result?.output ?? ""
+            let exitCode = result?.exitCode ?? -1
+            
+            logger.error("Git pull failed with exit code: \(exitCode)")
+            if !errorMsg.isEmpty {
+                logger.error("Error output: \(errorMsg)")
+            }
+            if !outputMsg.isEmpty {
+                logger.error("Standard output: \(outputMsg)")
+            }
+            
+            let combinedError = !errorMsg.isEmpty ? errorMsg : (!outputMsg.isEmpty ? outputMsg : "No error details available")
+            throw GitError.fetchFailed(combinedError)
         }
         
         logger.success("Repository updated successfully")
@@ -337,7 +365,7 @@ class GitManager {
 // MARK: - Change Tracker
 
 class ChangeTracker {
-    private let config: Configuration
+    private var config: Configuration
     private let logger: Logger
     
     init(config: Configuration, logger: Logger) {
@@ -419,7 +447,7 @@ class ApolloCLI {
         }
     }
     
-    private let config: Configuration
+    private var config: Configuration
     private let logger: Logger
     private let executor = ProcessExecutor()
     
@@ -497,7 +525,7 @@ class ApolloCLI {
 
 // MARK: - Main Functions
 
-func showHelp(config: Configuration) {
+func showHelp(config: inout Configuration) {
     print("""
     GraphQL Code Generation Script with Git Integration
     
@@ -530,7 +558,7 @@ func showHelp(config: Configuration) {
     """)
 }
 
-func updateApolloConfig(config: Configuration, schemaPath: URL, operationsPath: URL) throws {
+func updateApolloConfig(config: inout Configuration, schemaPath: URL, operationsPath: URL) throws {
     // This function would update the apollo-codegen-config.json
     // with the correct paths from the checked out repository
     // For now, this is a placeholder implementation
@@ -562,10 +590,10 @@ func updateApolloConfig(config: Configuration, schemaPath: URL, operationsPath: 
 
 func main() {
     let options = CommandLineOptions(arguments: CommandLine.arguments)
-    let config = Configuration()
+    var config = Configuration() // Changed from 'let' to 'var'
     
     if options.showHelp {
-        showHelp(config: config)
+        showHelp(config: &config) // Pass as inout
         exit(0)
     }
     
@@ -574,7 +602,7 @@ func main() {
     let changeTracker = ChangeTracker(config: config, logger: logger)
     let apolloCLI = ApolloCLI(config: config, logger: logger)
     
-    logger.info("🔧 GraphQL Code Generation with Git Integration")
+    logger.info("ðŸ"§ GraphQL Code Generation with Git Integration")
     logger.info("================================================")
     
     do {
@@ -582,7 +610,7 @@ func main() {
         
         if !options.skipGitUpdate {
             // Step 1: Check if we need to update from git
-            logger.info("\n📥 Checking for repository updates...")
+            logger.info("\nðŸ"¥ Checking for repository updates...")
             
             if !options.forceRegeneration {
                 let lastCommit = changeTracker.getLastProcessedCommit()
@@ -597,7 +625,7 @@ func main() {
             }
             
             // Step 2: Clone or update the repository
-            logger.info("\n📦 Updating repository...")
+            logger.info("\nðŸ"¦ Updating repository...")
             currentCommit = try gitManager.cloneOrUpdate()
             
             // Step 3: Validate schema and operations folders exist
@@ -605,7 +633,7 @@ func main() {
             
             // Step 4: Update Apollo config with paths from repo
             try updateApolloConfig(
-                config: config,
+                config: &config, // Pass as inout
                 schemaPath: gitManager.getSchemaPath(),
                 operationsPath: gitManager.getOperationsPath()
             )
@@ -614,7 +642,7 @@ func main() {
         }
         
         // Step 5: Generate GraphQL code
-        logger.info("\n🚀 Generating GraphQL code...")
+        logger.info("\nðŸš€ Generating GraphQL code...")
         let executable = try apolloCLI.validatePrerequisites()
         try apolloCLI.generateCode(using: executable)
         
@@ -624,7 +652,7 @@ func main() {
         }
         
         logger.info("")
-        logger.success("✨ Code generation completed successfully!")
+        logger.success("âœ¨ Code generation completed successfully!")
         exit(0)
         
     } catch {
